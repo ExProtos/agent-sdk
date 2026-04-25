@@ -88,6 +88,7 @@ export class ClaudeBackend implements Backend {
   readonly name = 'claude';
 
   private readonly tools: Tool[];
+  private readonly canonicalByWireName: Map<string, string>;
   private readonly sdkOptions: Pick<
     SDKOptions,
     'permissionMode' | 'systemPrompt' | 'additionalDirectories' | 'env' | 'allowedTools'
@@ -97,8 +98,12 @@ export class ClaudeBackend implements Backend {
     this.tools = options.tools ?? [];
 
     const allowedTools: string[] = [];
+    this.canonicalByWireName = new Map();
     for (const t of this.tools) {
-      if (t.native?.claude) allowedTools.push(t.native.claude);
+      if (t.native?.claude) {
+        allowedTools.push(t.native.claude);
+        this.canonicalByWireName.set(t.native.claude, t.name);
+      }
     }
 
     this.sdkOptions = {
@@ -134,13 +139,14 @@ export class ClaudeBackend implements Backend {
     });
 
     let aborted = false;
+    const nameMap = this.canonicalByWireName;
 
     async function* events(): AsyncGenerator<AgentEvent> {
       try {
         for await (const message of sdkResult) {
           if (aborted) return;
           yield { type: 'activity' };
-          yield* translateMessage(message);
+          yield* translateMessage(message, nameMap);
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -166,7 +172,19 @@ export function claude(options?: ClaudeBackendOptions): ClaudeBackend {
 
 // ── Event translation ──
 
-export function* translateMessage(message: SDKMessage): Generator<AgentEvent> {
+/**
+ * Translate an SDK message into AgentEvents.
+ *
+ * `canonicalByWireName` maps Claude SDK wire names (e.g. 'Bash') to canonical
+ * names from our Tool catalog (e.g. 'bash'). When the model uses a tool whose
+ * wire name is in the map, we emit the canonical name. Unknown tools (custom
+ * MCP, or built-ins not in the user's tools list) fall through to the wire
+ * name unchanged.
+ */
+export function* translateMessage(
+  message: SDKMessage,
+  canonicalByWireName?: Map<string, string>,
+): Generator<AgentEvent> {
   if (message.type === 'system' && message.subtype === 'init') {
     yield { type: 'session_start', continuation: message.session_id };
     return;
@@ -179,9 +197,10 @@ export function* translateMessage(message: SDKMessage): Generator<AgentEvent> {
       } else if (block.type === 'thinking') {
         yield { type: 'thinking_end', text: block.thinking };
       } else if (block.type === 'tool_use') {
+        const name = canonicalByWireName?.get(block.name) ?? block.name;
         yield {
           type: 'tool_call_end',
-          toolCall: { id: block.id, name: block.name, input: block.input },
+          toolCall: { id: block.id, name, input: block.input },
         };
       }
     }

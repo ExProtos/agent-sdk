@@ -19,6 +19,7 @@
 
 import type { AgentEvent, AgentQuery, Backend, QueryInput } from '../../types';
 import type { Tool } from '../../tools/types';
+import * as builtin from '../../tools/builtin';
 import { CodexClient, CodexRpcError, type CodexClientOptions } from './client';
 import type {
   GetAccountResponse,
@@ -300,7 +301,7 @@ export function translateItem(item: ThreadItem, queue: EventQueue): void {
       const i = item as { id: string; command: string; aggregatedOutput: string | null; exitCode: number | null };
       queue.push({
         type: 'tool_call_end',
-        toolCall: { id: i.id, name: 'bash', input: { command: i.command } },
+        toolCall: { id: i.id, name: builtin.bash.name, input: { command: i.command } },
       });
       queue.push({
         type: 'tool_result',
@@ -321,7 +322,7 @@ export function translateItem(item: ThreadItem, queue: EventQueue): void {
       };
       queue.push({
         type: 'tool_call_end',
-        toolCall: { id: i.id, name: 'applyPatch', input: { changes: i.changes } },
+        toolCall: { id: i.id, name: builtin.applyPatch.name, input: { changes: i.changes } },
       });
       // Only surface a tool_result once the patch is settled.
       if (i.status === 'completed' || i.status === 'failed' || i.status === 'declined') {

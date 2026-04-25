@@ -7,8 +7,8 @@ import { z } from 'zod';
 
 // ── translateMessage ──
 
-function collect(message: SDKMessage): AgentEvent[] {
-  return [...translateMessage(message)];
+function collect(message: SDKMessage, nameMap?: Map<string, string>): AgentEvent[] {
+  return [...translateMessage(message, nameMap)];
 }
 
 describe('translateMessage', () => {
@@ -44,7 +44,7 @@ describe('translateMessage', () => {
     expect(events).toEqual([{ type: 'thinking_end', text: 'reasoning…' }]);
   });
 
-  it('emits tool_call_end for assistant tool_use blocks', () => {
+  it('emits tool_call_end with wire name when no map provided', () => {
     const events = collect({
       type: 'assistant',
       message: {
@@ -65,6 +65,51 @@ describe('translateMessage', () => {
         toolCall: { id: 'tu_123', name: 'Bash', input: { command: 'ls' } },
       },
     ]);
+  });
+
+  it('emits tool_call_end with canonical name when map maps it', () => {
+    const nameMap = new Map([
+      ['Bash', 'bash'],
+      ['Read', 'read'],
+    ]);
+    const events = collect(
+      {
+        type: 'assistant',
+        message: {
+          content: [
+            { type: 'tool_use', id: 'tu_123', name: 'Bash', input: { command: 'ls' } },
+          ],
+        },
+      } as unknown as SDKMessage,
+      nameMap,
+    );
+
+    expect(events).toEqual([
+      {
+        type: 'tool_call_end',
+        toolCall: { id: 'tu_123', name: 'bash', input: { command: 'ls' } },
+      },
+    ]);
+  });
+
+  it('falls through to wire name for tools not in the map', () => {
+    const nameMap = new Map([['Bash', 'bash']]);
+    const events = collect(
+      {
+        type: 'assistant',
+        message: {
+          content: [
+            { type: 'tool_use', id: 'tu_x', name: 'mcp__custom__doThing', input: {} },
+          ],
+        },
+      } as unknown as SDKMessage,
+      nameMap,
+    );
+
+    expect(events[0]).toMatchObject({
+      type: 'tool_call_end',
+      toolCall: { name: 'mcp__custom__doThing' },
+    });
   });
 
   it('emits multiple events for a single assistant message with mixed blocks', () => {
