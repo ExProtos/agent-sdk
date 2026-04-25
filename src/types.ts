@@ -65,9 +65,13 @@ export type AgentEvent =
 /**
  * Input to a query. `continuation` is opaque — provider decides what it means
  * (Claude session ID, Codex thread ID, replay history, etc.).
+ *
+ * `message` is optional. If omitted, the query opens with no initial user
+ * message — useful when resuming a thread to inspect state, or when you want
+ * to push() the first message asynchronously.
  */
 export interface QueryInput {
-  prompt: string;
+  message?: string;
   continuation?: string;
   cwd?: string;
   systemPromptAppend?: string;
