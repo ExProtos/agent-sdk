@@ -59,7 +59,11 @@ export class CodexBackend implements Backend {
   private readonly clientOptions: CodexClientOptions;
   private readonly model: string | undefined;
   private readonly developerInstructions: string | undefined;
-  private readonly polyfilledTools: Tool[];
+  /**
+   * Tools that will be polyfilled via the MCP shim — i.e. those with an
+   * `execute()` and no `native.codex` mapping. Exposed for introspection.
+   */
+  readonly polyfilledTools: Tool[];
   private clientPromise: Promise<CodexClient> | null = null;
   private bridge: PolyfillBridge | null = null;
   private bridgeConfig: BridgeConfig | null = null;

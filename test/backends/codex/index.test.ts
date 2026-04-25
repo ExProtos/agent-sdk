@@ -655,4 +655,45 @@ describe('CodexBackend', () => {
     const backend = codex();
     await expect(backend.close()).resolves.toBeUndefined();
   });
+
+  describe('polyfill filtering', () => {
+    it('marks a tool with execute() and no native.codex as polyfilled', () => {
+      const t = {
+        name: 't',
+        description: 'd',
+        schema: { safeParse: () => ({ success: true, data: {} }) },
+        execute: async () => 'ok',
+      } as unknown as import('../../../src/tools/types').Tool;
+      const backend = codex({ tools: [t] });
+      expect(backend.polyfilledTools).toEqual([t]);
+    });
+
+    it('skips polyfill for tools that have native.codex', () => {
+      const t = {
+        name: 't',
+        description: 'd',
+        schema: { safeParse: () => ({ success: true, data: {} }) },
+        execute: async () => 'ok',
+        native: { codex: 'someNativeName' },
+      } as unknown as import('../../../src/tools/types').Tool;
+      const backend = codex({ tools: [t] });
+      expect(backend.polyfilledTools).toEqual([]);
+    });
+
+    it('skips polyfill for tools without execute()', () => {
+      const t = {
+        name: 't',
+        description: 'd',
+        schema: { safeParse: () => ({ success: true, data: {} }) },
+      } as unknown as import('../../../src/tools/types').Tool;
+      const backend = codex({ tools: [t] });
+      expect(backend.polyfilledTools).toEqual([]);
+    });
+
+    it('webFetch is NOT polyfilled on Codex (has native.codex via webSearch)', async () => {
+      const builtin = await import('../../../src/tools/builtin');
+      const backend = codex({ tools: [builtin.webFetch] });
+      expect(backend.polyfilledTools).toEqual([]);
+    });
+  });
 });

@@ -115,6 +115,18 @@ export const grep: Tool = {
   },
 };
 
+/**
+ * Fetch a URL. Native on both backends:
+ *   - Claude: dedicated `WebFetch` tool
+ *   - Codex: subsumed by the unified webSearch capability (action.type
+ *     'openPage'). The Codex backend translates that action variant back
+ *     to a `webFetch` event, so consumers see the same canonical name
+ *     regardless of which backend served the request.
+ *
+ * `execute` is the in-process polyfill used by backends that lack a native
+ * (e.g. Vercel AI SDK Agent). It is NOT used on Codex — the Codex backend
+ * sees `native.codex` is set and routes via Codex's native browsing.
+ */
 export const webFetch: Tool = {
   name: 'webFetch',
   description: 'Fetch the content of a URL and return it as text.',
@@ -123,6 +135,7 @@ export const webFetch: Tool = {
   }),
   native: {
     claude: 'WebFetch',
+    codex: 'webSearch',
   },
   execute: polyfills.webFetch,
 };
