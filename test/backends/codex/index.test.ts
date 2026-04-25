@@ -5,9 +5,9 @@ import {
   codex,
   translateItem,
   translateNotification,
-} from './index.js';
-import type { ServerNotification, ThreadItem } from './protocol.js';
-import type { AgentEvent } from '../../types.js';
+} from '../../../src/backends/codex/index.js';
+import type { ServerNotification, ThreadItem } from '../../../src/backends/codex/protocol.js';
+import type { AgentEvent } from '../../../src/types.js';
 
 // ── EventQueue ──
 

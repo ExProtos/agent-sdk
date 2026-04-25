@@ -6,11 +6,11 @@
  * actual `codex` binary.
  */
 
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
-import { CodexClient, CodexRpcError } from './client.js';
+import { CodexClient, CodexRpcError } from '../../../src/backends/codex/client.js';
 
 /**
  * Write a tiny Node script to a temp file that can stand in for `codex
