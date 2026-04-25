@@ -17,9 +17,9 @@
  *   query() errors with a clear message if not logged in
  */
 
-import type { AgentEvent, AgentQuery, Backend, QueryInput } from '../../types.js';
-import type { Tool } from '../../tools/types.js';
-import { CodexClient, CodexRpcError, type CodexClientOptions } from './client.js';
+import type { AgentEvent, AgentQuery, Backend, QueryInput } from '../../types';
+import type { Tool } from '../../tools/types';
+import { CodexClient, CodexRpcError, type CodexClientOptions } from './client';
 import type {
   GetAccountResponse,
   ServerNotification,
@@ -28,7 +28,7 @@ import type {
   ThreadResumeResponse,
   TurnStartResponse,
   UserInput,
-} from './protocol.js';
+} from './protocol';
 
 export interface CodexBackendOptions extends CodexClientOptions {
   tools?: Tool[];

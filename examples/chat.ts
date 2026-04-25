@@ -15,7 +15,7 @@
 import * as fs from 'node:fs';
 import * as readline from 'node:readline';
 import { z } from 'zod';
-import { Agent, claude, type Tool } from '../src/index.js';
+import { Agent, claude, type Tool } from '../src/index';
 
 const CONT_FILE = '.chat-continuation';
 

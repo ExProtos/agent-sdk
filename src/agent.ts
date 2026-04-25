@@ -1,4 +1,4 @@
-import type { AgentEvent, AgentQuery, Backend, QueryInput } from './types.js';
+import type { AgentEvent, AgentQuery, Backend, QueryInput } from './types';
 
 export interface AgentConfig {
   backend: Backend;

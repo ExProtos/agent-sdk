@@ -1,4 +1,4 @@
-export { Agent, type AgentConfig } from './agent.js';
+export { Agent, type AgentConfig } from './agent';
 export type {
   AgentEvent,
   AgentQuery,
@@ -8,12 +8,12 @@ export type {
   TokenUsage,
   ToolCall,
   ToolResult,
-} from './types.js';
-export type { Tool, ToolResultContent } from './tools/types.js';
+} from './types';
+export type { Tool, ToolResultContent } from './tools/types';
 
-export { claude, ClaudeBackend, type ClaudeBackendOptions } from './backends/claude.js';
+export { claude, ClaudeBackend, type ClaudeBackendOptions } from './backends/claude/index';
 export {
   codex,
   CodexBackend,
   type CodexBackendOptions,
-} from './backends/codex/index.js';
+} from './backends/codex/index';

@@ -7,7 +7,7 @@
  */
 
 import { z } from 'zod';
-import { Agent, claude, type Tool } from '../src/index.js';
+import { Agent, claude, type Tool } from '../src/index';
 
 const readTool: Tool = {
   name: 'read',

@@ -19,8 +19,8 @@ import {
   type SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk';
 
-import type { AgentEvent, AgentQuery, Backend, QueryInput } from '../types.js';
-import type { Tool } from '../tools/types.js';
+import type { AgentEvent, AgentQuery, Backend, QueryInput } from '../../types';
+import type { Tool } from '../../tools/types';
 
 export interface ClaudeBackendOptions {
   /**

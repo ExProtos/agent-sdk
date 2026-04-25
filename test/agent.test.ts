@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { Agent } from '../src/agent.js';
-import type { AgentEvent, AgentQuery, Backend, QueryInput } from '../src/types.js';
+import { Agent } from '../src/agent';
+import type { AgentEvent, AgentQuery, Backend, QueryInput } from '../src/types';
 
 function mockBackend(): Backend & { query: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn> } {
   const fakeQuery: AgentQuery = {

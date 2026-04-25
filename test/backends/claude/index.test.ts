@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk';
-import { ClaudeBackend, MessageStream, claude, translateMessage } from '../../src/backends/claude.js';
-import type { AgentEvent } from '../../src/types.js';
-import type { Tool } from '../../src/tools/types.js';
+import { ClaudeBackend, MessageStream, claude, translateMessage } from '../../../src/backends/claude/index';
+import type { AgentEvent } from '../../../src/types';
+import type { Tool } from '../../../src/tools/types';
 import { z } from 'zod';
 
 // ── translateMessage ──

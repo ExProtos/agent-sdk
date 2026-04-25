@@ -13,7 +13,7 @@
 
 import * as fs from 'node:fs';
 import * as readline from 'node:readline';
-import { Agent, codex } from '../src/index.js';
+import { Agent, codex } from '../src/index';
 
 const CONT_FILE = '.codex-continuation';
 

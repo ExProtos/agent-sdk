@@ -14,7 +14,7 @@ import { spawn, type ChildProcessByStdio } from 'node:child_process';
 import { createInterface, type Interface as ReadlineInterface } from 'node:readline';
 import type { Readable, Writable } from 'node:stream';
 
-import type { ServerNotification } from './protocol.js';
+import type { ServerNotification } from './protocol';
 
 interface RpcRequest {
   id: number | string;
