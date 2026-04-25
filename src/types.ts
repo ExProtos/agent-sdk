@@ -32,7 +32,11 @@ export interface ToolResult {
  */
 export type AgentEvent =
   // Lifecycle
-  | { type: 'session_start'; sessionId: string }
+  /**
+   * Emitted once at the start of a query. `continuation` is the opaque token
+   * to pass back as `QueryInput.continuation` to resume this thread later.
+   */
+  | { type: 'session_start'; continuation: string }
   | { type: 'session_end'; usage: TokenUsage; stopReason: StopReason }
   | { type: 'turn_end'; reason: StopReason }
   | { type: 'error'; message: string; retryable: boolean }
