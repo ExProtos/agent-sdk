@@ -44,6 +44,55 @@ function isResponse(msg: unknown): msg is RpcResponse {
   );
 }
 
+/**
+ * Default response shapes for server-initiated requests. Codex's protocol
+ * has many request methods that expect typed responses (not just `{}`);
+ * sending the wrong shape results in "missing field X" deserialization
+ * errors that can stall the conversation. Mirrors OpenClaw's defaults.
+ *
+ * For all of these we choose the most conservative "decline / no-op"
+ * variant — actual handling (approve a command, accept user input)
+ * belongs in higher-level wiring once we expose hooks for it.
+ */
+function defaultServerRequestResponse(method: string): unknown {
+  switch (method) {
+    case 'item/commandExecution/requestApproval':
+    case 'item/fileChange/requestApproval':
+    case 'applyPatchApproval':
+    case 'execCommandApproval':
+      return { decision: 'decline' };
+
+    case 'item/permissions/requestApproval':
+      return { permissions: {}, scope: 'turn' };
+
+    case 'mcpServer/elicitation/request':
+      // Codex asks for approval whenever the model tries to call an MCP-served
+      // tool. Since the user explicitly passed the tool to the backend (via
+      // the `tools` option), they've already approved it — auto-accept.
+      // Note: this is global; if the user wires up additional MCP servers
+      // via Codex's TOML config, those would also be auto-accepted. Caveat
+      // that's worth tightening if it bites.
+      return { action: 'accept', content: {}, _meta: null };
+
+    case 'item/tool/call':
+      return {
+        contentItems: [
+          {
+            type: 'inputText',
+            text: 'No handler registered for this app-server tool call.',
+          },
+        ],
+        success: false,
+      };
+
+    case 'item/tool/requestUserInput':
+      return { action: 'decline' };
+
+    default:
+      return {};
+  }
+}
+
 export class CodexRpcError extends Error {
   constructor(
     message: string,
@@ -195,10 +244,9 @@ export class CodexClient {
       return;
     }
     if ('method' in msg) {
-      // Server-initiated requests have an id; we reply with default `{}` for now.
-      // (Codex sends approval requests, fuzzy file search, etc. — minimal stub.)
       if ('id' in msg && (msg as RpcRequest).id !== undefined) {
-        this.write({ id: (msg as RpcRequest).id, result: {} });
+        const req = msg as RpcRequest;
+        this.write({ id: req.id, result: defaultServerRequestResponse(req.method) });
         return;
       }
       this.dispatchNotification(msg as RpcNotification);

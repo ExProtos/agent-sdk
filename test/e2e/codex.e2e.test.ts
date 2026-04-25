@@ -90,7 +90,7 @@ describe.skipIf(!codexE2eEnabled)('Codex end-to-end', () => {
         message:
           'Call the currentTime tool with timezone "Asia/Tokyo". Then echo back exactly the value the tool returned.',
       });
-      const events = await collectEvents(query);
+      const events = await collectEventsVerbose(query, 'codex-bridge');
 
       // The closure ran in OUR process — verify side effects
       expect(invocations).toBeGreaterThanOrEqual(1);

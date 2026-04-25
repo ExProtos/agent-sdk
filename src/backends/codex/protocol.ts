@@ -21,7 +21,8 @@ export interface ThreadStartParams {
   developerInstructions?: string | null;
 }
 export interface ThreadStartResponse {
-  threadId: string;
+  thread: { id: string };
+  // Other fields (model, modelProvider, serviceTier, cwd, etc.) ignored.
 }
 
 export interface ThreadResumeParams {
@@ -30,7 +31,7 @@ export interface ThreadResumeParams {
   developerInstructions?: string | null;
 }
 export interface ThreadResumeResponse {
-  threadId: string;
+  thread: { id: string };
 }
 
 export interface TurnStartParams {
@@ -39,7 +40,7 @@ export interface TurnStartParams {
   cwd?: string | null;
 }
 export interface TurnStartResponse {
-  turnId: string;
+  turn: { id: string };
 }
 
 export interface TurnInterruptParams {

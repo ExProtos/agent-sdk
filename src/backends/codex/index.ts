@@ -156,7 +156,7 @@ export class CodexBackend implements Backend {
             }),
             ...(codexConfig !== null && { config: codexConfig }),
           });
-          activeThreadId = resp.threadId;
+          activeThreadId = resp.thread.id;
         } else {
           const resp = await client.request<ThreadStartResponse>('thread/start', {
             ...(input.cwd !== undefined && { cwd: input.cwd }),
@@ -168,7 +168,7 @@ export class CodexBackend implements Backend {
             experimentalRawEvents: false,
             persistExtendedHistory: false,
           });
-          activeThreadId = resp.threadId;
+          activeThreadId = resp.thread.id;
         }
 
         queue.push({ type: 'session_start', continuation: activeThreadId });

@@ -62,6 +62,7 @@ export class PolyfillBridge {
   private server: Server | null = null;
   private socketPath: string | null = null;
   private readonly tools = new Map<string, Tool>();
+  private readonly connections = new Set<Socket>();
 
   /**
    * Register a tool. Must have an `execute` function (no native.codex check
@@ -110,6 +111,11 @@ export class PolyfillBridge {
     if (!this.server) return;
     const server = this.server;
     this.server = null;
+    // Force-destroy any active shim connections — server.close() alone only
+    // stops accepting NEW connections and waits for existing ones to drain,
+    // which can hang indefinitely if the shim subprocess hasn't exited.
+    for (const sock of this.connections) sock.destroy();
+    this.connections.clear();
     await new Promise<void>((resolve) => server.close(() => resolve()));
     // Best-effort cleanup of the socket file (ENOENT is fine).
     if (this.socketPath && process.platform !== 'win32') {
@@ -127,14 +133,19 @@ export class PolyfillBridge {
 
   private handleConnection(socket: Socket): void {
     socket.setEncoding('utf8');
+    this.connections.add(socket);
     const lines = createInterface({ input: socket });
 
     lines.on('line', (line) => {
       void this.handleLine(line, socket);
     });
 
+    socket.on('close', () => {
+      this.connections.delete(socket);
+    });
+
     socket.on('error', () => {
-      /* shim disconnected; nothing to do */
+      this.connections.delete(socket);
     });
   }
 

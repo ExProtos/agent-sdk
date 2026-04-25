@@ -48,7 +48,14 @@ if (!socketPath || !manifestJson) {
 }
 
 const manifest: ManifestEntry[] = JSON.parse(manifestJson);
-const socket = await openSocket(socketPath);
+process.stderr.write(
+  `[shim] starting; socket=${socketPath} manifest=${manifest.map((m) => m.name).join(',')}\n`,
+);
+const socket = await openSocket(socketPath).catch((err) => {
+  process.stderr.write(`[shim] failed to connect to ${socketPath}: ${String(err)}\n`);
+  process.exit(2);
+});
+process.stderr.write('[shim] connected to parent\n');
 const lines = createInterface({ input: socket });
 
 let nextId = 1;
