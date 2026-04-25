@@ -19,6 +19,24 @@ export async function collectEvents(query: AgentQuery): Promise<AgentEvent[]> {
   return events;
 }
 
+/**
+ * Like collectEvents, but also prints every event to stderr as it arrives.
+ * Useful when a test is failing mysteriously and you want to see the full
+ * sequence (errors, partial events, etc.).
+ */
+export async function collectEventsVerbose(
+  query: AgentQuery,
+  label = 'events',
+): Promise<AgentEvent[]> {
+  const events: AgentEvent[] = [];
+  for await (const ev of query.events) {
+    events.push(ev);
+    const summary = JSON.stringify(ev).slice(0, 300);
+    process.stderr.write(`[${label}] ${summary}\n`);
+  }
+  return events;
+}
+
 /** Find all tool_call_end events. */
 export function toolCalls(events: AgentEvent[]): Array<{ name: string; input: unknown }> {
   return events

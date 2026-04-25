@@ -17,6 +17,7 @@ import {
   assembledText,
   codexE2eEnabled,
   collectEvents,
+  collectEventsVerbose,
   continuationFromEvents,
   toolCalls,
 } from './helpers';
@@ -28,7 +29,8 @@ describe.skipIf(!codexE2eEnabled)('Codex end-to-end', () => {
       const query = agent.run({
         message: 'Reply with exactly the word OK and nothing else.',
       });
-      const events = await collectEvents(query);
+      // Verbose collector dumps every event to stderr as it arrives.
+      const events = await collectEventsVerbose(query, 'codex-trivial');
 
       expect(events.find((e) => e.type === 'session_start')).toBeDefined();
       expect(events.find((e) => e.type === 'session_end')).toBeDefined();
