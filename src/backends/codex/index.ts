@@ -376,6 +376,48 @@ export function translateItem(item: ThreadItem, queue: EventQueue): void {
       return;
     }
 
+    case 'webSearch': {
+      const i = item as {
+        id: string;
+        query: string;
+        action: {
+          type: 'search' | 'openPage' | 'findInPage' | 'other';
+          query?: string | null;
+          queries?: string[] | null;
+          url?: string | null;
+          pattern?: string | null;
+        } | null;
+      };
+      // Map action variants back to our canonical tool names. openPage is
+      // browsing → webFetch; everything else falls under webSearch.
+      if (i.action?.type === 'openPage' && typeof i.action.url === 'string') {
+        queue.push({
+          type: 'tool_call_end',
+          toolCall: {
+            id: i.id,
+            name: builtin.webFetch.name,
+            input: { url: i.action.url },
+          },
+        });
+      } else {
+        const input: Record<string, unknown> = {};
+        if (i.action?.type === 'search') {
+          if (i.action.query) input.query = i.action.query;
+          if (i.action.queries) input.queries = i.action.queries;
+        } else if (i.action?.type === 'findInPage') {
+          if (i.action.url) input.url = i.action.url;
+          if (i.action.pattern) input.pattern = i.action.pattern;
+        }
+        // Fallback to the item-level query if action didn't supply one.
+        if (!('query' in input) && i.query) input.query = i.query;
+        queue.push({
+          type: 'tool_call_end',
+          toolCall: { id: i.id, name: builtin.webSearch.name, input },
+        });
+      }
+      return;
+    }
+
     case 'mcpToolCall':
     case 'dynamicToolCall': {
       const i = item as { id: string; tool: string; arguments: unknown; result?: unknown; error?: unknown };

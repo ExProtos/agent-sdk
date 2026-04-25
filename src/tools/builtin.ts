@@ -128,10 +128,14 @@ export const webFetch: Tool = {
 };
 
 /**
- * Web search. Claude has a native `WebSearch` tool (provider runs the search
- * server-side). Codex performs web searches as part of its loop and emits
- * `webSearch` items, but doesn't expose a tool clients invoke explicitly —
- * `native.codex` is intentionally unset.
+ * Web search. Both backends run the search server-side:
+ *   - Claude exposes it as the `WebSearch` tool (filterable via allowedTools)
+ *   - Codex runs it as part of its built-in browsing capability and emits
+ *     `webSearch` items (not filterable per-call; controlled by Codex config)
+ *
+ * Codex's webSearch item also covers `openPage` (≈ webFetch) and
+ * `findInPage`. The Codex backend translates each action variant back to
+ * our canonical name in the event stream.
  */
 export const webSearch: Tool = {
   name: 'webSearch',
@@ -141,6 +145,7 @@ export const webSearch: Tool = {
   }),
   native: {
     claude: 'WebSearch',
+    codex: 'webSearch',
   },
 };
 

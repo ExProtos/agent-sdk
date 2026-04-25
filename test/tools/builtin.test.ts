@@ -59,7 +59,8 @@ describe('native tool mappings', () => {
     read: 'fs/readFile',
     write: 'fs/writeFile',
     applyPatch: 'apply_patch',
-    // edit, glob, grep, webFetch, webSearch intentionally unmapped on Codex
+    webSearch: 'webSearch',
+    // edit, glob, grep, webFetch intentionally unmapped on Codex
   };
 
   it.each(all)('$name has the expected native.claude mapping', (tool: Tool) => {

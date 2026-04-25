@@ -76,9 +76,15 @@ export interface TurnError {
 
 /**
  * Subset of ThreadItem variants we surface as events. Other variants
- * (imageView, plan, mcpToolCall, etc.) flow through as raw notifications
- * the consumer can ignore.
+ * (imageView, plan, etc.) flow through as raw notifications the consumer
+ * can ignore.
  */
+export type WebSearchAction =
+  | { type: 'search'; query: string | null; queries: string[] | null }
+  | { type: 'openPage'; url: string | null }
+  | { type: 'findInPage'; url: string | null; pattern: string | null }
+  | { type: 'other' };
+
 export type ThreadItem =
   | { type: 'agentMessage'; id: string; text: string }
   | { type: 'reasoning'; id: string; summary: string[]; content: string[] }
@@ -94,6 +100,12 @@ export type ThreadItem =
       id: string;
       changes: Array<{ path: string; kind: string; diff: string }>;
       status: 'inProgress' | 'completed' | 'failed' | 'declined';
+    }
+  | {
+      type: 'webSearch';
+      id: string;
+      query: string;
+      action: WebSearchAction | null;
     }
   | {
       type: 'mcpToolCall';

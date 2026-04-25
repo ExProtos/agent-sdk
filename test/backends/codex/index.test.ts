@@ -335,6 +335,99 @@ describe('translateItem', () => {
     const events = await collectAsync({ type: 'imageView', id: 'img-1' } as unknown as ThreadItem);
     expect(events).toEqual([]);
   });
+
+  it('emits webSearch tool_call for action.type=search', async () => {
+    const events = await collectAsync({
+      type: 'webSearch',
+      id: 'ws-1',
+      query: 'rust async runtimes',
+      action: { type: 'search', query: 'rust async runtimes', queries: ['rust async runtimes'] },
+    } as unknown as ThreadItem);
+
+    expect(events).toEqual([
+      {
+        type: 'tool_call_end',
+        toolCall: {
+          id: 'ws-1',
+          name: 'webSearch',
+          input: { query: 'rust async runtimes', queries: ['rust async runtimes'] },
+        },
+      },
+    ]);
+  });
+
+  it('maps action.type=openPage to a webFetch tool_call', async () => {
+    const events = await collectAsync({
+      type: 'webSearch',
+      id: 'ws-2',
+      query: '',
+      action: { type: 'openPage', url: 'https://example.com' },
+    } as unknown as ThreadItem);
+
+    expect(events).toEqual([
+      {
+        type: 'tool_call_end',
+        toolCall: {
+          id: 'ws-2',
+          name: 'webFetch',
+          input: { url: 'https://example.com' },
+        },
+      },
+    ]);
+  });
+
+  it('emits webSearch with url+pattern for action.type=findInPage', async () => {
+    const events = await collectAsync({
+      type: 'webSearch',
+      id: 'ws-3',
+      query: 'fallback query',
+      action: { type: 'findInPage', url: 'https://example.com', pattern: 'kubernetes' },
+    } as unknown as ThreadItem);
+
+    expect(events).toEqual([
+      {
+        type: 'tool_call_end',
+        toolCall: {
+          id: 'ws-3',
+          name: 'webSearch',
+          input: { url: 'https://example.com', pattern: 'kubernetes', query: 'fallback query' },
+        },
+      },
+    ]);
+  });
+
+  it('falls back to item-level query when action is null or unknown', async () => {
+    const events = await collectAsync({
+      type: 'webSearch',
+      id: 'ws-4',
+      query: 'just a string',
+      action: null,
+    } as unknown as ThreadItem);
+
+    expect(events).toEqual([
+      {
+        type: 'tool_call_end',
+        toolCall: {
+          id: 'ws-4',
+          name: 'webSearch',
+          input: { query: 'just a string' },
+        },
+      },
+    ]);
+  });
+
+  it("treats action.type='other' as plain webSearch", async () => {
+    const events = await collectAsync({
+      type: 'webSearch',
+      id: 'ws-5',
+      query: 'something',
+      action: { type: 'other' },
+    } as unknown as ThreadItem);
+
+    expect(events.map((e) => e.type)).toEqual(['tool_call_end']);
+    const ev = events[0] as { toolCall: { name: string } };
+    expect(ev.toolCall.name).toBe('webSearch');
+  });
 });
 
 // ── translateNotification ──
