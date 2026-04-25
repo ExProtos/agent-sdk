@@ -17,10 +17,13 @@
  *   query() errors with a clear message if not logged in
  */
 
+import { fileURLToPath } from 'node:url';
+import * as path from 'node:path';
 import type { AgentEvent, AgentQuery, Backend, QueryInput } from '../../types';
 import type { Tool } from '../../tools/types';
 import * as builtin from '../../tools/builtin';
 import { CodexClient, CodexRpcError, type CodexClientOptions } from './client';
+import { PolyfillBridge, type BridgeConfig } from './polyfill-bridge';
 import type {
   GetAccountResponse,
   ServerNotification,
@@ -56,15 +59,23 @@ export class CodexBackend implements Backend {
   private readonly clientOptions: CodexClientOptions;
   private readonly model: string | undefined;
   private readonly developerInstructions: string | undefined;
+  private readonly polyfilledTools: Tool[];
   private clientPromise: Promise<CodexClient> | null = null;
+  private bridge: PolyfillBridge | null = null;
+  private bridgeConfig: BridgeConfig | null = null;
 
   constructor(options: CodexBackendOptions = {}) {
-    const { tools: _tools, model, developerInstructions, ...client } = options;
+    const { tools, model, developerInstructions, ...client } = options;
     this.clientOptions = client;
     this.model = model;
     this.developerInstructions = developerInstructions;
-    // tools are accepted but unused in v0 (native Codex tools fire automatically;
-    // polyfills via in-process MCP land later). Silently ignored on purpose.
+
+    // Polyfill-eligible: has execute() and no native.codex (Codex's built-in
+    // tools always win when both are present, since they fire automatically
+    // server-side without our involvement).
+    this.polyfilledTools = (tools ?? []).filter(
+      (t) => typeof t.execute === 'function' && !t.native?.codex,
+    );
   }
 
   isContinuationInvalid(err: unknown): boolean {
@@ -73,10 +84,32 @@ export class CodexBackend implements Backend {
   }
 
   async close(): Promise<void> {
-    if (!this.clientPromise) return;
-    const client = await this.clientPromise.catch(() => null);
-    this.clientPromise = null;
-    if (client) await client.close();
+    if (this.clientPromise) {
+      const client = await this.clientPromise.catch(() => null);
+      this.clientPromise = null;
+      if (client) await client.close();
+    }
+    if (this.bridge) {
+      await this.bridge.stop();
+      this.bridge = null;
+      this.bridgeConfig = null;
+    }
+  }
+
+  /**
+   * Lazy-start the polyfill bridge (only if there are polyfilled tools).
+   * Returns the BridgeConfig the next thread/start should plumb into Codex's
+   * mcp_servers config.
+   */
+  private async ensureBridge(): Promise<BridgeConfig | null> {
+    if (this.polyfilledTools.length === 0) return null;
+    if (this.bridgeConfig) return this.bridgeConfig;
+
+    const bridge = new PolyfillBridge();
+    for (const tool of this.polyfilledTools) bridge.register(tool);
+    this.bridge = bridge;
+    this.bridgeConfig = await bridge.start();
+    return this.bridgeConfig;
   }
 
   query(input: QueryInput): AgentQuery {
@@ -86,6 +119,7 @@ export class CodexBackend implements Backend {
 
     const start = async () => {
       const client = await this.ensureClient();
+      const bridgeConfig = await this.ensureBridge();
 
       // Verify auth before doing anything else.
       const account = await client.request<GetAccountResponse>('account/read', {});
@@ -100,6 +134,8 @@ export class CodexBackend implements Backend {
         translateNotification(notif, activeThreadId, queue),
       );
 
+      const codexConfig = buildCodexConfig(bridgeConfig);
+
       try {
         // Start or resume thread.
         if (input.continuation) {
@@ -109,6 +145,7 @@ export class CodexBackend implements Backend {
             ...(this.developerInstructions !== undefined && {
               developerInstructions: this.developerInstructions,
             }),
+            ...(codexConfig !== null && { config: codexConfig }),
           });
           activeThreadId = resp.threadId;
         } else {
@@ -118,6 +155,7 @@ export class CodexBackend implements Backend {
             ...(this.developerInstructions !== undefined && {
               developerInstructions: this.developerInstructions,
             }),
+            ...(codexConfig !== null && { config: codexConfig }),
             experimentalRawEvents: false,
             persistExtendedHistory: false,
           });
@@ -358,6 +396,44 @@ export function translateItem(item: ThreadItem, queue: EventQueue): void {
 
 function zeroUsage() {
   return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+}
+
+/**
+ * Path to the MCP shim script. Resolved relative to this file so it works
+ * whether running tsx-from-source (.ts) or after a tsc build (.js).
+ */
+function shimSpawn(): { command: string; args: string[] } {
+  const here = fileURLToPath(import.meta.url);
+  const ext = path.extname(here); // '.ts' in dev, '.js' after build
+  const shim = path.join(path.dirname(here), `mcp-shim${ext}`);
+  if (ext === '.ts') {
+    // Need tsx to load TS source. node --import tsx walks node_modules from
+    // the shim's directory, so tsx must be installed in our package.
+    return { command: 'node', args: ['--import', 'tsx', shim] };
+  }
+  return { command: 'node', args: [shim] };
+}
+
+/**
+ * Build the Codex config blob to pass to thread/start. Currently only
+ * registers the polyfill MCP server; returns null when there are no
+ * polyfilled tools (so thread/start gets no config override at all).
+ */
+function buildCodexConfig(bridge: BridgeConfig | null): Record<string, unknown> | null {
+  if (!bridge) return null;
+  const spawn = shimSpawn();
+  return {
+    mcp_servers: {
+      'agent-sdk': {
+        command: spawn.command,
+        args: spawn.args,
+        env: {
+          AGENT_SDK_SOCKET: bridge.socketPath,
+          AGENT_SDK_MANIFEST: JSON.stringify(bridge.manifest),
+        },
+      },
+    },
+  };
 }
 
 // ── Push-based event queue ──

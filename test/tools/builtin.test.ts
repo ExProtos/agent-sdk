@@ -31,9 +31,12 @@ describe('builtin tools', () => {
     }
   });
 
-  it('no tool ships with a polyfill execute() in v0', () => {
+  it('only tools with deliberate polyfills ship execute()', () => {
+    const expectedExecutes = new Set(['webFetch']);
     for (const tool of all) {
-      expect(tool.execute, `${tool.name} should not have execute() yet`).toBeUndefined();
+      const has = typeof tool.execute === 'function';
+      const expected = expectedExecutes.has(tool.name);
+      expect(has, `${tool.name}: execute() ${expected ? 'expected' : 'unexpected'}`).toBe(expected);
     }
   });
 });

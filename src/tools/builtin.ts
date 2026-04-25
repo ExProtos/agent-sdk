@@ -116,12 +116,19 @@ export const grep: Tool = {
 
 export const webFetch: Tool = {
   name: 'webFetch',
-  description: 'Fetch the content of a URL and return it. Claude-only.',
+  description: 'Fetch the content of a URL and return it as text.',
   schema: z.object({
     url: z.string().url(),
   }),
   native: {
     claude: 'WebFetch',
+  },
+  execute: async ({ url }: { url: string }): Promise<string> => {
+    const res = await fetch(url);
+    if (!res.ok) {
+      throw new Error(`webFetch failed: ${res.status} ${res.statusText}`);
+    }
+    return await res.text();
   },
 };
 
