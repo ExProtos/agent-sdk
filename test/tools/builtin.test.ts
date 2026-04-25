@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   all,
-  applyPatch,
   bash,
   edit,
   glob,
@@ -14,9 +13,9 @@ import {
 import type { Tool } from '../../src/tools/types';
 
 describe('builtin tools', () => {
-  it('all is the canonical 9-tool set', () => {
-    expect(all).toEqual([bash, read, write, edit, applyPatch, glob, grep, webFetch, webSearch]);
-    expect(all).toHaveLength(9);
+  it('all is the canonical 8-tool set', () => {
+    expect(all).toEqual([bash, read, write, edit, glob, grep, webFetch, webSearch]);
+    expect(all).toHaveLength(8);
   });
 
   it('every tool has unique name', () => {
@@ -52,18 +51,16 @@ describe('native tool mappings', () => {
     grep: 'Grep',
     webFetch: 'WebFetch',
     webSearch: 'WebSearch',
-    // applyPatch intentionally unmapped on Claude
   };
   const expectedCodex: Record<string, string | undefined> = {
     bash: 'command/exec',
     read: 'fs/readFile',
     write: 'fs/writeFile',
-    applyPatch: 'apply_patch',
-    glob: 'command/exec', // Codex's model uses bash for file finding
-    grep: 'command/exec', // Codex's model uses bash/rg for content search
-    webFetch: 'webSearch', // Codex's openPage action subsumes webFetch
+    edit: 'apply_patch', // Codex's apply_patch subsumes find/replace via unified-diff
+    glob: 'command/exec',
+    grep: 'command/exec',
+    webFetch: 'webSearch',
     webSearch: 'webSearch',
-    // edit intentionally unmapped on Codex (use applyPatch for unified-diff)
   };
 
   it.each(all)('$name has the expected native.claude mapping', (tool: Tool) => {
@@ -95,9 +92,22 @@ describe('schema validation', () => {
     expect(write.schema.safeParse({ content: 'hi' }).success).toBe(false);
   });
 
-  it('edit requires path, old_string, new_string', () => {
+  it('edit accepts the find/replace shape', () => {
     expect(edit.schema.safeParse({ path: '/x', old_string: 'a', new_string: 'b' }).success).toBe(true);
+  });
+
+  it('edit accepts the unified-diff shape', () => {
+    expect(edit.schema.safeParse({ patch: '--- a\n+++ b\n@@ -1 +1 @@\n-x\n+y\n' }).success).toBe(true);
+  });
+
+  it('edit rejects partial find/replace shape', () => {
     expect(edit.schema.safeParse({ path: '/x' }).success).toBe(false);
+    expect(edit.schema.safeParse({ path: '/x', old_string: 'a' }).success).toBe(false);
+  });
+
+  it('edit rejects unrelated shapes', () => {
+    expect(edit.schema.safeParse({}).success).toBe(false);
+    expect(edit.schema.safeParse({ random: 'thing' }).success).toBe(false);
   });
 
   it('glob requires pattern, path optional', () => {
@@ -123,16 +133,11 @@ describe('schema validation', () => {
     expect(webSearch.schema.safeParse({}).success).toBe(false);
   });
 
-  it('applyPatch requires patch string', () => {
-    expect(applyPatch.schema.safeParse({ patch: '--- a\n+++ b\n@@ -1 +1 @@\n-x\n+y\n' }).success).toBe(true);
-    expect(applyPatch.schema.safeParse({}).success).toBe(false);
-    expect(applyPatch.schema.safeParse({ patch: 42 }).success).toBe(false);
-  });
 });
 
 describe('Tool type guarantees', () => {
   it('every tool can be passed where a Tool is expected', () => {
-    const list: Tool[] = [bash, read, write, edit, applyPatch, glob, grep, webFetch, webSearch];
-    expect(list.length).toBe(9);
+    const list: Tool[] = [bash, read, write, edit, glob, grep, webFetch, webSearch];
+    expect(list.length).toBe(8);
   });
 });

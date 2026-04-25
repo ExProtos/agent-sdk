@@ -364,7 +364,7 @@ export function translateItem(item: ThreadItem, queue: EventQueue): void {
       };
       queue.push({
         type: 'tool_call_end',
-        toolCall: { id: i.id, name: builtin.applyPatch.name, input: { changes: i.changes } },
+        toolCall: { id: i.id, name: builtin.edit.name, input: { changes: i.changes } },
       });
       // Only surface a tool_result once the patch is settled.
       if (i.status === 'completed' || i.status === 'failed' || i.status === 'declined') {

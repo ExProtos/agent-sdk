@@ -222,7 +222,7 @@ describe('translateItem', () => {
     expect(events).toEqual([
       {
         type: 'tool_call_end',
-        toolCall: { id: 'fc-1', name: 'applyPatch', input: { changes } },
+        toolCall: { id: 'fc-1', name: 'edit', input: { changes } },
       },
       {
         type: 'tool_result',

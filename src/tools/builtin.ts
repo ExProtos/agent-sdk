@@ -52,40 +52,32 @@ export const write: Tool = {
 };
 
 /**
- * Find/replace edit (Claude's `Edit` shape). Single `old_string` must match
- * exactly once. Distinct from `applyPatch` (unified-diff format used by Codex)
- * — they're different cognitive operations and models are trained on one or
- * the other.
+ * Edit a file. Accepts either of two shapes:
+ *   - find/replace: { path, old_string, new_string } — Claude's Edit shape
+ *   - unified-diff: { patch } — Codex's apply_patch shape
+ *
+ * The schema is a union so the model emits whichever shape its training
+ * prefers; the polyfill (when we add it for Vercel) discriminates by
+ * field presence and runs the appropriate implementation. On Claude and
+ * Codex backends the schema is informational — each backend uses its
+ * native tool, which has its own schema.
  */
 export const edit: Tool = {
   name: 'edit',
-  description: 'Replace exact text in a file. The `old_string` must appear exactly once.',
-  schema: z.object({
-    path: z.string(),
-    old_string: z.string(),
-    new_string: z.string(),
-  }),
+  description:
+    'Edit a file. Provide either {path, old_string, new_string} for find/replace, or {patch} as a unified-diff.',
+  schema: z.union([
+    z.object({
+      path: z.string(),
+      old_string: z.string(),
+      new_string: z.string(),
+    }),
+    z.object({
+      patch: z.string(),
+    }),
+  ]),
   native: {
     claude: 'Edit',
-  },
-};
-
-/**
- * Apply a unified-diff patch (Codex's `apply_patch` shape). Can span multiple
- * files and multiple hunks. Distinct from `edit` — see edit's docstring.
- *
- * No polyfill is planned: models that don't natively speak unified-diff
- * (everything except OpenAI's coding models) tend to be unreliable at it.
- * Users wanting cross-backend file edits should prefer `edit`.
- */
-export const applyPatch: Tool = {
-  name: 'applyPatch',
-  description:
-    'Apply a unified-diff patch. Can span multiple files and multiple hunks. The patch must be in standard unified-diff format.',
-  schema: z.object({
-    patch: z.string(),
-  }),
-  native: {
     codex: 'apply_patch',
   },
 };
@@ -177,19 +169,6 @@ export const webSearch: Tool = {
 };
 
 /**
- * Default coding-agent toolbox. Convenience for the common case — both
- * `edit` and `applyPatch` are included so the same `tools.all` works
- * across Claude (uses edit) and Codex (uses applyPatch). Each backend
- * exposes only what it natively supports.
+ * Default coding-agent toolbox.
  */
-export const all: Tool[] = [
-  bash,
-  read,
-  write,
-  edit,
-  applyPatch,
-  glob,
-  grep,
-  webFetch,
-  webSearch,
-];
+export const all: Tool[] = [bash, read, write, edit, glob, grep, webFetch, webSearch];
