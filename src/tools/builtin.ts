@@ -9,6 +9,7 @@
 
 import { z } from 'zod';
 import type { Tool } from './types';
+import * as polyfills from './polyfills';
 
 export const bash: Tool = {
   name: 'bash',
@@ -123,13 +124,7 @@ export const webFetch: Tool = {
   native: {
     claude: 'WebFetch',
   },
-  execute: async ({ url }: { url: string }): Promise<string> => {
-    const res = await fetch(url);
-    if (!res.ok) {
-      throw new Error(`webFetch failed: ${res.status} ${res.statusText}`);
-    }
-    return await res.text();
-  },
+  execute: polyfills.webFetch,
 };
 
 /**
