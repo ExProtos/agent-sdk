@@ -22,6 +22,7 @@ A single TypeScript library where you can write agent code once and run it on:
 | [wrapper-design.md](wrapper-design.md) | Proposed architecture: unified event stream, tool catalog with polyfills, per-backend implementation sketches |
 | [auth-and-tos.md](auth-and-tos.md) | Subscription OAuth tokens (`CLAUDE_CODE_OAUTH_TOKEN`, ChatGPT-via-Codex) vs API keys — what's supported, what's gray-area |
 | [prior-art.md](prior-art.md) | Competitive analysis — `one-agent-sdk`, Rivet Sandbox Agent SDK, OpenClaw's Codex integration, Mastra, ACP, Pi, etc. Confirms gaps our wrapper would fill |
+| [learnings-from-prior-art.md](learnings-from-prior-art.md) | Synthesis of patterns from NanoClaw, OpenClaw, Pi, and one-agent-sdk — concrete design decisions before coding |
 
 ## TL;DR
 
@@ -35,13 +36,15 @@ A single TypeScript library where you can write agent code once and run it on:
 
 Research / design phase. No code yet.
 
-## Pre-build reading order
+## Pre-build reading
 
-Confirmed prior art exists; no exact match. Before writing code:
+Done. See [learnings-from-prior-art.md](learnings-from-prior-art.md) for the synthesis. Key takeaways:
 
-1. **[OpenClaw](https://github.com/openclaw/openclaw)** `extensions/codex/src/app-server/` + `scripts/sync-codex-app-server-protocol.ts` — most directly relevant Codex AppServer integration.
-2. **[`one-agent-sdk`](https://github.com/odysa/one-agent-sdk)** — closest architectural twin for the multi-backend dispatch pattern.
-3. **[Rivet Sandbox Agent SDK](https://github.com/rivet-dev/sandbox-agent)** universal event schema — reference for our unified `AgentEvent` design.
-4. **[Pi](https://github.com/badlogic/pi-mono)** OAuth surface — the only existing TS thing with subscription auth across multiple providers.
+- **NanoClaw's `AgentProvider`** shape is the cleanest minimal interface — adopt directly (`query()` → `{push, end, events, abort}` + opaque `continuation` token).
+- **Pi's normalized event stream** with start/delta/end events carrying partial-message snapshots is the cleanest streaming protocol — adopt for our `AgentEvent` union.
+- **Pi's `Operations` injection pattern** is exactly the right shape for our tool polyfill story — same tool definition, swappable execution backend.
+- **OpenClaw's CodexAppServerClient** is the production reference for our Codex backend — generic typed JSON-RPC, singleton-per-config cache, separate auth bridge, generated protocol types.
+- **Pi's OAuth `Provider` interface** (`{login, refreshToken, getApiKey, modifyModels?}`) covers five real flow shapes — adopt, but skip Pi's plaintext disk storage; defer storage to caller.
+- **one-agent-sdk** is mostly what NOT to do — don't pick one provider's wire format as canonical; type per-backend options properly; don't bake in `bypassPermissions` defaults.
 
-See [prior-art.md](prior-art.md) for the full analysis.
+Ready for step 2: types-and-contracts spike.
