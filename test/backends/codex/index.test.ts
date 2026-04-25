@@ -336,6 +336,21 @@ describe('translateItem', () => {
     expect(events).toEqual([]);
   });
 
+  it('emits tool_call_end for plan items as canonical todo', async () => {
+    const events = await collectAsync({
+      type: 'plan',
+      id: 'plan-1',
+      text: '1. read\n2. think\n3. edit',
+    } as ThreadItem);
+
+    expect(events).toEqual([
+      {
+        type: 'tool_call_end',
+        toolCall: { id: 'plan-1', name: 'todo', input: { text: '1. read\n2. think\n3. edit' } },
+      },
+    ]);
+  });
+
   it('emits webSearch tool_call for action.type=search', async () => {
     const events = await collectAsync({
       type: 'webSearch',

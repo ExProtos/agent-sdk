@@ -380,6 +380,15 @@ export function translateItem(item: ThreadItem, queue: EventQueue): void {
       return;
     }
 
+    case 'plan': {
+      const i = item as { id: string; text: string };
+      queue.push({
+        type: 'tool_call_end',
+        toolCall: { id: i.id, name: builtin.todo.name, input: { text: i.text } },
+      });
+      return;
+    }
+
     case 'webSearch': {
       const i = item as {
         id: string;

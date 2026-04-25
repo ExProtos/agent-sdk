@@ -88,6 +88,7 @@ export type WebSearchAction =
 export type ThreadItem =
   | { type: 'agentMessage'; id: string; text: string }
   | { type: 'reasoning'; id: string; summary: string[]; content: string[] }
+  | { type: 'plan'; id: string; text: string }
   | {
       type: 'commandExecution';
       id: string;

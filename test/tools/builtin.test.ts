@@ -6,6 +6,7 @@ import {
   glob,
   grep,
   read,
+  todo,
   webFetch,
   webSearch,
   write,
@@ -13,9 +14,9 @@ import {
 import type { Tool } from '../../src/tools/types';
 
 describe('builtin tools', () => {
-  it('all is the canonical 8-tool set', () => {
-    expect(all).toEqual([bash, read, write, edit, glob, grep, webFetch, webSearch]);
-    expect(all).toHaveLength(8);
+  it('all is the canonical 9-tool set', () => {
+    expect(all).toEqual([bash, read, write, edit, glob, grep, webFetch, webSearch, todo]);
+    expect(all).toHaveLength(9);
   });
 
   it('every tool has unique name', () => {
@@ -51,16 +52,18 @@ describe('native tool mappings', () => {
     grep: 'Grep',
     webFetch: 'WebFetch',
     webSearch: 'WebSearch',
+    todo: 'TodoWrite',
   };
   const expectedCodex: Record<string, string | undefined> = {
     bash: 'command/exec',
     read: 'fs/readFile',
     write: 'fs/writeFile',
-    edit: 'apply_patch', // Codex's apply_patch subsumes find/replace via unified-diff
+    edit: 'apply_patch',
     glob: 'command/exec',
     grep: 'command/exec',
     webFetch: 'webSearch',
     webSearch: 'webSearch',
+    todo: 'plan',
   };
 
   it.each(all)('$name has the expected native.claude mapping', (tool: Tool) => {
@@ -133,11 +136,39 @@ describe('schema validation', () => {
     expect(webSearch.schema.safeParse({}).success).toBe(false);
   });
 
+  it('todo accepts the structured todos shape', () => {
+    expect(
+      todo.schema.safeParse({
+        todos: [
+          { content: 'do thing', status: 'pending', activeForm: 'Doing thing' },
+          { content: 'finished', status: 'completed', activeForm: 'Finishing' },
+        ],
+      }).success,
+    ).toBe(true);
+  });
+
+  it('todo accepts the freeform text shape', () => {
+    expect(todo.schema.safeParse({ text: 'step 1\nstep 2\n' }).success).toBe(true);
+  });
+
+  it('todo rejects unknown status values', () => {
+    expect(
+      todo.schema.safeParse({
+        todos: [{ content: 'x', status: 'wat', activeForm: 'x' }],
+      }).success,
+    ).toBe(false);
+  });
+
+  it('todo rejects unrelated shapes', () => {
+    expect(todo.schema.safeParse({}).success).toBe(false);
+    expect(todo.schema.safeParse({ random: 'thing' }).success).toBe(false);
+  });
+
 });
 
 describe('Tool type guarantees', () => {
   it('every tool can be passed where a Tool is expected', () => {
-    const list: Tool[] = [bash, read, write, edit, glob, grep, webFetch, webSearch];
-    expect(list.length).toBe(8);
+    const list: Tool[] = [bash, read, write, edit, glob, grep, webFetch, webSearch, todo];
+    expect(list.length).toBe(9);
   });
 });

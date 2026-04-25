@@ -169,6 +169,36 @@ export const webSearch: Tool = {
 };
 
 /**
+ * Track multi-step plans as the agent works.
+ *
+ * Claude has `TodoWrite` (structured: array of todos with status). Codex has
+ * `plan` items (freeform text). Schema is a union so the model emits whatever
+ * its training prefers; events surface under one canonical name with the
+ * raw input shape preserved.
+ */
+export const todo: Tool = {
+  name: 'todo',
+  description:
+    'Record or update the agent\'s multi-step plan. Either pass a structured `todos` array, or freeform `text`.',
+  schema: z.union([
+    z.object({
+      todos: z.array(
+        z.object({
+          content: z.string(),
+          status: z.enum(['pending', 'in_progress', 'completed']),
+          activeForm: z.string(),
+        }),
+      ),
+    }),
+    z.object({ text: z.string() }),
+  ]),
+  native: {
+    claude: 'TodoWrite',
+    codex: 'plan',
+  },
+};
+
+/**
  * Default coding-agent toolbox.
  */
-export const all: Tool[] = [bash, read, write, edit, glob, grep, webFetch, webSearch];
+export const all: Tool[] = [bash, read, write, edit, glob, grep, webFetch, webSearch, todo];
