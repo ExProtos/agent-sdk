@@ -17,7 +17,8 @@ Designed for general-purpose assistants (NanoClaw / OpenClaw / protos style), no
 
 - ✅ Claude Agent SDK backend
 - ✅ Codex AppServer backend (with custom-tool MCP bridge)
-- 🚧 Vercel AI SDK Agent backend — coming next, unlocks local models (Ollama, vLLM, LM Studio, llama.cpp) and provider-agnostic model selection
+- 🚧 Vercel AI SDK Agent backend — coming next; unlocks local models (Ollama, vLLM, LM Studio, llama.cpp) and provider-agnostic model selection. See [docs/vercel-ai-sdk-agent.md](docs/vercel-ai-sdk-agent.md).
+- 🚧 OpenAI Agents SDK backend — separate from Codex; adds OpenAI's hosted tools (Code Interpreter, Computer Use, hosted Web Search) and built-in tracing for API-key users. See [docs/openai-agents.md](docs/openai-agents.md).
 
 ## Quick start
 
@@ -152,7 +153,7 @@ pnpm exec tsx examples/codex-custom-tool.ts
 | Tool registration | Native where supported; in-process MCP via subprocess shim where not |
 | Subprocess lifecycle | Lazy-spawn on first query; clean up on `agent.close()` |
 
-See `docs/` for the original research and design notes that led to the current shape.
+See `docs/` for design notes on the planned backends.
 
 ## Why a wrapper at all
 
