@@ -10,6 +10,7 @@ export type {
   ToolResult,
 } from './types';
 export type { Tool, ToolResultContent } from './tools/types';
+export * as tools from './tools/builtin';
 
 export { claude, ClaudeBackend, type ClaudeBackendOptions } from './backends/claude/index';
 export {

@@ -14,23 +14,13 @@
 
 import * as fs from 'node:fs';
 import * as readline from 'node:readline';
-import { z } from 'zod';
-import { Agent, claude, type Tool } from '../src/index';
+import { Agent, claude, tools } from '../src/index';
 
 const CONT_FILE = '.chat-continuation';
 
-const tools: Tool[] = [
-  { name: 'bash', description: 'Run a shell command', schema: z.object({ command: z.string() }), native: { claude: 'Bash' } },
-  { name: 'read', description: 'Read a file', schema: z.object({ path: z.string() }), native: { claude: 'Read' } },
-  { name: 'write', description: 'Write a file', schema: z.object({ path: z.string(), content: z.string() }), native: { claude: 'Write' } },
-  { name: 'edit', description: 'Edit a file', schema: z.object({ path: z.string() }), native: { claude: 'Edit' } },
-  { name: 'glob', description: 'Find files', schema: z.object({ pattern: z.string() }), native: { claude: 'Glob' } },
-  { name: 'grep', description: 'Search files', schema: z.object({ pattern: z.string() }), native: { claude: 'Grep' } },
-];
-
 const agent = new Agent({
   backend: claude({
-    tools,
+    tools: tools.all,
     permissionMode: 'bypassPermissions',
   }),
 });

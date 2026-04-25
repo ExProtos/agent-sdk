@@ -6,26 +6,11 @@
  *   pnpm exec tsx examples/claude-hello.ts
  */
 
-import { z } from 'zod';
-import { Agent, claude, type Tool } from '../src/index';
-
-const readTool: Tool = {
-  name: 'read',
-  description: 'Read a file from disk',
-  schema: z.object({ path: z.string() }),
-  native: { claude: 'Read' },
-};
-
-const bashTool: Tool = {
-  name: 'bash',
-  description: 'Run a shell command',
-  schema: z.object({ command: z.string() }),
-  native: { claude: 'Bash' },
-};
+import { Agent, claude, tools } from '../src/index';
 
 const agent = new Agent({
   backend: claude({
-    tools: [readTool, bashTool],
+    tools: [tools.read, tools.bash],
     permissionMode: 'bypassPermissions',
   }),
 });
