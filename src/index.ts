@@ -10,3 +10,5 @@ export type {
   ToolResult,
 } from './types.js';
 export type { Tool, ToolResultContent } from './tools/types.js';
+
+export { claude, ClaudeBackend, type ClaudeBackendOptions } from './backends/claude.js';
