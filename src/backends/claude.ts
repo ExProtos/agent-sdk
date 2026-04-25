@@ -50,7 +50,7 @@ const STALE_SESSION_RE = /no conversation found|ENOENT.*\.jsonl|session.*not fou
 /**
  * Push-based async iterable for streaming user messages into the SDK.
  */
-class MessageStream {
+export class MessageStream {
   private queue: SDKUserMessage[] = [];
   private waiter: (() => void) | null = null;
   private done = false;
@@ -166,7 +166,7 @@ export function claude(options?: ClaudeBackendOptions): ClaudeBackend {
 
 // ── Event translation ──
 
-function* translateMessage(message: SDKMessage): Generator<AgentEvent> {
+export function* translateMessage(message: SDKMessage): Generator<AgentEvent> {
   if (message.type === 'system' && message.subtype === 'init') {
     yield { type: 'session_start', continuation: message.session_id };
     return;

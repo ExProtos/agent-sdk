@@ -215,7 +215,7 @@ export function codex(options?: CodexBackendOptions): CodexBackend {
 
 // ── Event translation ──
 
-function translateNotification(
+export function translateNotification(
   notif: ServerNotification,
   expectedThreadId: string | undefined,
   queue: EventQueue,
@@ -281,7 +281,7 @@ function translateNotification(
   }
 }
 
-function translateItem(item: ThreadItem, queue: EventQueue): void {
+export function translateItem(item: ThreadItem, queue: EventQueue): void {
   switch (item.type) {
     case 'agentMessage':
       if ('text' in item) queue.push({ type: 'text_end', text: item.text });
@@ -346,7 +346,7 @@ function zeroUsage() {
 
 // ── Push-based event queue ──
 
-class EventQueue {
+export class EventQueue {
   private items: AgentEvent[] = [];
   private waiter: (() => void) | null = null;
   private done = false;
