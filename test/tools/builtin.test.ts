@@ -31,7 +31,7 @@ describe('builtin tools', () => {
     }
   });
 
-  it('only tools with deliberate polyfills ship execute()', () => {
+  it('only tools with intentional implementations ship execute()', () => {
     const expectedExecutes = new Set(['webFetch']);
     for (const tool of all) {
       const has = typeof tool.execute === 'function';

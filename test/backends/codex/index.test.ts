@@ -671,8 +671,8 @@ describe('CodexBackend', () => {
     await expect(backend.close()).resolves.toBeUndefined();
   });
 
-  describe('polyfill filtering', () => {
-    it('marks a tool with execute() and no native.codex as polyfilled', () => {
+  describe('custom-tool filtering', () => {
+    it('marks a tool with execute() and no native.codex as bridged', () => {
       const t = {
         name: 't',
         description: 'd',
@@ -680,10 +680,10 @@ describe('CodexBackend', () => {
         execute: async () => 'ok',
       } as unknown as import('../../../src/tools/types').Tool;
       const backend = codex({ tools: [t] });
-      expect(backend.polyfilledTools).toEqual([t]);
+      expect(backend.customTools).toEqual([t]);
     });
 
-    it('skips polyfill for tools that have native.codex', () => {
+    it('skips bridge for tools that have native.codex', () => {
       const t = {
         name: 't',
         description: 'd',
@@ -692,23 +692,23 @@ describe('CodexBackend', () => {
         native: { codex: 'someNativeName' },
       } as unknown as import('../../../src/tools/types').Tool;
       const backend = codex({ tools: [t] });
-      expect(backend.polyfilledTools).toEqual([]);
+      expect(backend.customTools).toEqual([]);
     });
 
-    it('skips polyfill for tools without execute()', () => {
+    it('skips bridge for tools without execute()', () => {
       const t = {
         name: 't',
         description: 'd',
         schema: { safeParse: () => ({ success: true, data: {} }) },
       } as unknown as import('../../../src/tools/types').Tool;
       const backend = codex({ tools: [t] });
-      expect(backend.polyfilledTools).toEqual([]);
+      expect(backend.customTools).toEqual([]);
     });
 
-    it('webFetch is NOT polyfilled on Codex (has native.codex via webSearch)', async () => {
+    it('webFetch is NOT bridged on Codex (has native.codex via webSearch)', async () => {
       const builtin = await import('../../../src/tools/builtin');
       const backend = codex({ tools: [builtin.webFetch] });
-      expect(backend.polyfilledTools).toEqual([]);
+      expect(backend.customTools).toEqual([]);
     });
   });
 });

@@ -58,7 +58,7 @@ interface InvokeError {
   error: { message: string };
 }
 
-export class PolyfillBridge {
+export class McpBridge {
   private server: Server | null = null;
   private socketPath: string | null = null;
   private readonly tools = new Map<string, Tool>();
@@ -70,7 +70,7 @@ export class PolyfillBridge {
    */
   register(tool: Tool): void {
     if (typeof tool.execute !== 'function') {
-      throw new Error(`Tool '${tool.name}' has no execute() — cannot polyfill`);
+      throw new Error(`Tool '${tool.name}' has no execute() — cannot bridge`);
     }
     this.tools.set(tool.name, tool);
   }
@@ -80,7 +80,7 @@ export class PolyfillBridge {
    * thread/start.
    */
   async start(): Promise<BridgeConfig> {
-    if (this.server) throw new Error('PolyfillBridge already started');
+    if (this.server) throw new Error('McpBridge already started');
     if (this.tools.size === 0) throw new Error('No tools registered');
 
     const socketPath = makeSocketPath();

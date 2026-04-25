@@ -8,8 +8,10 @@
  *   command/exec, fs/readFile, fs/writeFile, apply_patch run server-side
  *   automatically — we don't register them, we just pass through their
  *   output as events)
- * - Polyfill tools (no native.codex) are silently dropped in v0; in-process
- *   MCP server registration via Codex's config comes later
+ * - Custom tools (have execute(), no native.codex) are exposed to Codex
+ *   via the MCP bridge — Codex spawns mcp-shim.ts as a subprocess MCP
+ *   server, which proxies invocations back to the parent over a Unix
+ *   socket so the user's closures run in the parent process
  * - Coarse event translation: full items at `item/completed`. Streaming
  *   deltas (`item/agentMessage/delta`, `item/reasoning/textDelta`) are
  *   surfaced as text_delta / thinking_delta events
@@ -23,7 +25,7 @@ import type { AgentEvent, AgentQuery, Backend, QueryInput } from '../../types';
 import type { Tool } from '../../tools/types';
 import * as builtin from '../../tools/builtin';
 import { CodexClient, CodexRpcError, type CodexClientOptions } from './client';
-import { PolyfillBridge, type BridgeConfig } from './polyfill-bridge';
+import { McpBridge, type BridgeConfig } from './mcp-bridge';
 import type {
   GetAccountResponse,
   ServerNotification,
@@ -60,12 +62,12 @@ export class CodexBackend implements Backend {
   private readonly model: string | undefined;
   private readonly developerInstructions: string | undefined;
   /**
-   * Tools that will be polyfilled via the MCP shim — i.e. those with an
+   * Tools that will be routed through the MCP bridge — i.e. those with an
    * `execute()` and no `native.codex` mapping. Exposed for introspection.
    */
-  readonly polyfilledTools: Tool[];
+  readonly customTools: Tool[];
   private clientPromise: Promise<CodexClient> | null = null;
-  private bridge: PolyfillBridge | null = null;
+  private bridge: McpBridge | null = null;
   private bridgeConfig: BridgeConfig | null = null;
 
   constructor(options: CodexBackendOptions = {}) {
@@ -74,10 +76,10 @@ export class CodexBackend implements Backend {
     this.model = model;
     this.developerInstructions = developerInstructions;
 
-    // Polyfill-eligible: has execute() and no native.codex (Codex's built-in
+    // Bridge-eligible: has execute() and no native.codex (Codex's built-in
     // tools always win when both are present, since they fire automatically
     // server-side without our involvement).
-    this.polyfilledTools = (tools ?? []).filter(
+    this.customTools = (tools ?? []).filter(
       (t) => typeof t.execute === 'function' && !t.native?.codex,
     );
   }
@@ -101,16 +103,16 @@ export class CodexBackend implements Backend {
   }
 
   /**
-   * Lazy-start the polyfill bridge (only if there are polyfilled tools).
+   * Lazy-start the MCP bridge (only if there are custom tools to expose).
    * Returns the BridgeConfig the next thread/start should plumb into Codex's
    * mcp_servers config.
    */
   private async ensureBridge(): Promise<BridgeConfig | null> {
-    if (this.polyfilledTools.length === 0) return null;
+    if (this.customTools.length === 0) return null;
     if (this.bridgeConfig) return this.bridgeConfig;
 
-    const bridge = new PolyfillBridge();
-    for (const tool of this.polyfilledTools) bridge.register(tool);
+    const bridge = new McpBridge();
+    for (const tool of this.customTools) bridge.register(tool);
     this.bridge = bridge;
     this.bridgeConfig = await bridge.start();
     return this.bridgeConfig;
@@ -473,8 +475,8 @@ function shimSpawn(): { command: string; args: string[] } {
 
 /**
  * Build the Codex config blob to pass to thread/start. Currently only
- * registers the polyfill MCP server; returns null when there are no
- * polyfilled tools (so thread/start gets no config override at all).
+ * registers the MCP bridge server; returns null when there are no custom
+ * tools (so thread/start gets no config override at all).
  */
 function buildCodexConfig(bridge: BridgeConfig | null): Record<string, unknown> | null {
   if (!bridge) return null;

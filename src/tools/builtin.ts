@@ -1,15 +1,16 @@
 /**
  * Pre-built Tool definitions for the canonical coding-agent toolbox.
  *
- * v0: native mappings only. The schema and description are informational —
- * Claude SDK and Codex AppServer use their own internal tool descriptions
- * when these tools fire natively. They become load-bearing when we add
- * the Vercel backend (polyfilled execution via in-process MCP).
+ * The schema and description are informational on Claude and Codex —
+ * each SDK has its own internal tool definitions when these fire natively.
+ * They become load-bearing when used on a backend without a native (Vercel
+ * AI SDK Agent, when added) or routed through the MCP bridge for a custom
+ * tool.
  */
 
 import { z } from 'zod';
 import type { Tool } from './types';
-import * as polyfills from './polyfills';
+import * as impl from './implementations';
 
 export const bash: Tool = {
   name: 'bash',
@@ -57,8 +58,8 @@ export const write: Tool = {
  *   - unified-diff: { patch } — Codex's apply_patch shape
  *
  * The schema is a union so the model emits whichever shape its training
- * prefers; the polyfill (when we add it for Vercel) discriminates by
- * field presence and runs the appropriate implementation. On Claude and
+ * prefers; the in-process implementation (when we add it for Vercel)
+ * discriminates by field presence. On Claude and
  * Codex backends the schema is informational — each backend uses its
  * native tool, which has its own schema.
  */
@@ -86,8 +87,9 @@ export const edit: Tool = {
  * Find files matching a glob pattern. Claude has it as a dedicated `Glob`
  * tool. Codex doesn't have a dedicated tool — its model uses bash (find,
  * ls, etc.) via command/exec. Marking native.codex='command/exec' so the
- * Codex backend doesn't try to polyfill (we'd just shadow what bash already
- * does well, and the model is trained to reach for bash anyway).
+ * Codex backend doesn't try to bridge a custom implementation (we'd just
+ * shadow what bash already does well, and the model is trained to reach
+ * for bash anyway).
  */
 export const glob: Tool = {
   name: 'glob',
@@ -105,7 +107,8 @@ export const glob: Tool = {
 /**
  * Search file contents. Claude has a dedicated `Grep` tool. Codex doesn't,
  * but its model is heavily trained on bash-based grep/rg via command/exec.
- * Same reasoning as glob — don't polyfill, let Codex use shell.
+ * Same reasoning as glob — don't bridge a custom implementation, let
+ * Codex use shell.
  */
 export const grep: Tool = {
   name: 'grep',
@@ -129,9 +132,10 @@ export const grep: Tool = {
  *     to a `webFetch` event, so consumers see the same canonical name
  *     regardless of which backend served the request.
  *
- * `execute` is the in-process polyfill used by backends that lack a native
- * (e.g. Vercel AI SDK Agent). It is NOT used on Codex — the Codex backend
- * sees `native.codex` is set and routes via Codex's native browsing.
+ * `execute` is the in-process implementation used by backends that lack
+ * a native (e.g. Vercel AI SDK Agent). It is NOT used on Codex — the
+ * Codex backend sees `native.codex` is set and routes via Codex's native
+ * browsing.
  */
 export const webFetch: Tool = {
   name: 'webFetch',
@@ -143,7 +147,7 @@ export const webFetch: Tool = {
     claude: 'WebFetch',
     codex: 'webSearch',
   },
-  execute: polyfills.webFetch,
+  execute: impl.webFetch,
 };
 
 /**

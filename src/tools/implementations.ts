@@ -1,17 +1,17 @@
 /**
- * Polyfill implementations for builtin tools.
+ * In-process implementations of builtin tools.
  *
- * These are the `execute()` functions that get attached to Tool definitions
- * in `builtin.ts`. They run in the user's Node process when:
+ * These are the `execute()` functions attached to Tool definitions in
+ * `builtin.ts`. They run in the user's Node process when:
  *   - The Vercel AI SDK Agent backend is in use (no native tools at all)
  *   - The Codex backend is in use AND the tool has no `native.codex`
- *     (executed via the in-process MCP shim — see ./codex/polyfill-bridge.ts)
+ *     (executed via the in-process MCP bridge — see ./codex/mcp-bridge.ts)
  *
- * Polyfills should be:
+ * Implementations should be:
  *   - Stateless (closures over module scope only — no `this`)
  *   - Side-effecting only on the local filesystem / network
  *   - Match the canonical Tool's schema exactly
- *   - Throw Error on failure (the bridge will surface as an MCP error)
+ *   - Throw Error on failure (the bridge surfaces these as MCP errors)
  */
 
 export async function webFetch({ url }: { url: string }): Promise<string> {

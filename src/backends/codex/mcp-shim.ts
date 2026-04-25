@@ -10,8 +10,8 @@
  * shim never sees the actual tool's `execute` — that closure stays in the
  * parent's process.
  *
- * One shim instance per Codex thread that uses polyfilled tools. Codex
- * keeps it alive for the duration of the thread.
+ * One shim instance per Codex thread that uses custom tools. Codex keeps
+ * it alive for the duration of the thread.
  */
 
 import { connect, type Socket } from 'node:net';
@@ -88,7 +88,7 @@ socket.on('close', () => {
 });
 
 const server = new Server(
-  { name: 'agent-sdk-polyfills', version: '0.0.0' },
+  { name: 'agent-sdk-bridge', version: '0.0.0' },
   { capabilities: { tools: {} } },
 );
 

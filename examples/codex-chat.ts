@@ -18,7 +18,7 @@ import { Agent, codex, tools } from '../src/index';
 const CONT_FILE = '.codex-continuation';
 
 // webFetch is a Claude-only native tool. The Codex backend sees it has an
-// execute() and no native.codex, so it spins up the polyfill bridge + MCP
+// execute() and no native.codex, so it spins up the MCP bridge + MCP
 // shim subprocess, and the model can call it.
 const agent = new Agent({
   backend: codex({

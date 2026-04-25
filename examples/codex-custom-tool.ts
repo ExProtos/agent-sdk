@@ -1,5 +1,5 @@
 /**
- * End-to-end test of the polyfill bridge with a user-defined custom tool.
+ * End-to-end test of the MCP bridge with a user-defined custom tool.
  *
  * Demonstrates:
  *   - A Tool defined inline with a real `execute()` closure
@@ -33,7 +33,7 @@ const currentTime: Tool = {
   schema: z.object({
     timezone: z.string().optional(),
   }),
-  // No native.codex — the polyfill bridge will route invocations to this
+  // No native.codex — the MCP bridge will route invocations to this
   // execute() in the parent process.
   execute: async ({ timezone }: { timezone?: string }): Promise<string> => {
     const now = new Date();
@@ -58,7 +58,7 @@ const currentTime: Tool = {
 const agent = new Agent({
   backend: codex({
     // Mix of native tools (which fire automatically server-side) and
-    // a polyfilled custom tool (which routes through the MCP bridge).
+    // a custom tool (which routes through the MCP bridge).
     tools: [...tools.all, currentTime],
   }),
 });

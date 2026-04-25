@@ -7,7 +7,7 @@ The wrapper does not reimplement the agent loop — it delegates to each backend
 - **Unified event stream** across both backends (`session_start`, `text_delta`, `tool_call_end`, `tool_result`, `session_end`, …)
 - **Canonical tool names** so consumer code doesn't have to know that Claude calls it `Bash` and Codex calls it `commandExecution` — both surface as `name: 'bash'`
 - **Built-in tool catalog** that maps to native tools where each backend supports them
-- **Polyfill bridge** for user-defined custom tools — your closures run in your process, even on Codex (where Codex spawns a subprocess MCP shim that proxies calls back over a Unix socket)
+- **MCP bridge** for user-defined custom tools — your closures run in your process, even on Codex (where Codex spawns a subprocess MCP shim that proxies calls back over a Unix socket)
 
 Designed for general-purpose assistants (NanoClaw / OpenClaw / protos style), not specifically for coding agents — though it works well for those too.
 
@@ -16,7 +16,7 @@ Designed for general-purpose assistants (NanoClaw / OpenClaw / protos style), no
 ## Status
 
 - ✅ Claude Agent SDK backend
-- ✅ Codex AppServer backend (with custom-tool polyfill bridge)
+- ✅ Codex AppServer backend (with custom-tool MCP bridge)
 - 🚧 Vercel AI SDK Agent backend — coming next, unlocks local models (Ollama, vLLM, LM Studio, llama.cpp) and provider-agnostic model selection
 
 ## Quick start
@@ -135,7 +135,7 @@ AGENT_SDK_CODEX_E2E=1                        # opt in to Codex e2e
 
 - `chat.ts` — interactive Claude chat loop
 - `codex-chat.ts` — interactive Codex chat loop
-- `codex-custom-tool.ts` — custom polyfill tool (`currentTime`) running on Codex via the bridge
+- `codex-custom-tool.ts` — custom tool (`currentTime`) running on Codex via the MCP bridge
 
 ```bash
 pnpm exec tsx examples/codex-custom-tool.ts
@@ -160,7 +160,7 @@ Two main reasons:
 
 1. **Provider portability with subscription auth.** Claude Agent SDK supports `CLAUDE_CODE_OAUTH_TOKEN` (Pro/Max subscriptions); Codex AppServer supports ChatGPT OAuth via `codex login`. Building a portable assistant means writing against both. This wrapper handles the impedance.
 
-2. **Custom tools as closures, not subprocesses.** MCP servers normally need to be standalone executables. The polyfill bridge lets you pass a regular TS function with closure-captured state and have it actually run on Codex. That's the bridge architecture's main value-add.
+2. **Custom tools as closures, not subprocesses.** MCP servers normally need to be standalone executables. The MCP bridge lets you pass a regular TS function with closure-captured state and have it actually run on Codex. That's the bridge architecture's main value-add.
 
 Vercel AI SDK Agent support is the next major addition — unlocks local models (Ollama / vLLM / LM Studio / llama.cpp) and provider-agnostic model selection.
 

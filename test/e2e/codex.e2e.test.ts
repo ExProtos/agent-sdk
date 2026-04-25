@@ -63,7 +63,7 @@ describe.skipIf(!codexE2eEnabled)('Codex end-to-end', () => {
     }
   }, 120_000);
 
-  it('routes a polyfilled custom tool through the MCP shim bridge', async () => {
+  it('routes a custom tool through the MCP shim bridge', async () => {
     let invocations = 0;
     let lastTimezone: string | undefined;
 
@@ -73,7 +73,7 @@ describe.skipIf(!codexE2eEnabled)('Codex end-to-end', () => {
       schema: z.object({
         timezone: z.string().optional(),
       }),
-      // No native.codex — must polyfill via the bridge
+      // No native.codex — must route through the bridge
       execute: async ({ timezone }: { timezone?: string }): Promise<string> => {
         invocations++;
         lastTimezone = timezone;

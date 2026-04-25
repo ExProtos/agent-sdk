@@ -3,8 +3,9 @@
  *
  * v0 scope:
  * - Native tools only (Tool.native.claude → allowedTools)
- * - Tools without `native.claude` are silently skipped (polyfill via in-process
- *   MCP comes when we add the Vercel backend)
+ * - Tools without `native.claude` are silently skipped (in-process MCP
+ *   registration for custom tools is a future addition; on Codex they
+ *   route through the MCP bridge instead)
  * - Coarse event translation: complete content blocks (text/thinking/tool_use)
  *   surface as text_end / thinking_end / tool_call_end events; no streaming
  *   deltas yet
@@ -25,8 +26,8 @@ import type { Tool } from '../../tools/types';
 export interface ClaudeBackendOptions {
   /**
    * Tools to expose. Only tools with `native.claude` set take effect in v0;
-   * others are silently dropped. (In-process MCP polyfill is added when the
-   * Vercel backend lands.)
+   * others are silently dropped. (In-process MCP registration for custom
+   * tools on Claude is a future addition.)
    */
   tools?: Tool[];
   /**

@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest';
 import { createConnection, type Socket } from 'node:net';
 import { createInterface } from 'node:readline';
 import { z } from 'zod';
-import { PolyfillBridge } from '../../../src/backends/codex/polyfill-bridge';
+import { McpBridge } from '../../../src/backends/codex/mcp-bridge';
 import type { Tool } from '../../../src/tools/types';
 
 interface InvokeResp {
@@ -69,14 +69,14 @@ const noExecuteTool: Tool = {
   schema: z.object({}),
 };
 
-describe('PolyfillBridge', () => {
+describe('McpBridge', () => {
   it('register() rejects tools without execute', () => {
-    const bridge = new PolyfillBridge();
+    const bridge = new McpBridge();
     expect(() => bridge.register(noExecuteTool)).toThrow(/has no execute/);
   });
 
   it('start() returns socket path and manifest', async () => {
-    const bridge = new PolyfillBridge();
+    const bridge = new McpBridge();
     bridge.register(echoTool);
     bridge.register(addTool);
     const config = await bridge.start();
@@ -96,12 +96,12 @@ describe('PolyfillBridge', () => {
   });
 
   it('start() rejects when no tools registered', async () => {
-    const bridge = new PolyfillBridge();
+    const bridge = new McpBridge();
     await expect(bridge.start()).rejects.toThrow(/No tools registered/);
   });
 
   it('start() rejects double-start', async () => {
-    const bridge = new PolyfillBridge();
+    const bridge = new McpBridge();
     bridge.register(echoTool);
     await bridge.start();
     try {
@@ -112,7 +112,7 @@ describe('PolyfillBridge', () => {
   });
 
   it('handles invoke RPC and returns text result', async () => {
-    const bridge = new PolyfillBridge();
+    const bridge = new McpBridge();
     bridge.register(echoTool);
     const config = await bridge.start();
 
@@ -131,7 +131,7 @@ describe('PolyfillBridge', () => {
   });
 
   it('serializes object results as JSON', async () => {
-    const bridge = new PolyfillBridge();
+    const bridge = new McpBridge();
     bridge.register(addTool);
     const config = await bridge.start();
 
@@ -150,7 +150,7 @@ describe('PolyfillBridge', () => {
   });
 
   it('rejects unknown tool names', async () => {
-    const bridge = new PolyfillBridge();
+    const bridge = new McpBridge();
     bridge.register(echoTool);
     const config = await bridge.start();
 
@@ -168,7 +168,7 @@ describe('PolyfillBridge', () => {
   });
 
   it('rejects args that fail schema validation', async () => {
-    const bridge = new PolyfillBridge();
+    const bridge = new McpBridge();
     bridge.register(addTool);
     const config = await bridge.start();
 
@@ -186,7 +186,7 @@ describe('PolyfillBridge', () => {
   });
 
   it('returns error response when execute() throws', async () => {
-    const bridge = new PolyfillBridge();
+    const bridge = new McpBridge();
     bridge.register(throwingTool);
     const config = await bridge.start();
 
@@ -204,7 +204,7 @@ describe('PolyfillBridge', () => {
   });
 
   it('stop() is idempotent', async () => {
-    const bridge = new PolyfillBridge();
+    const bridge = new McpBridge();
     bridge.register(echoTool);
     await bridge.start();
     await bridge.stop();
@@ -212,7 +212,7 @@ describe('PolyfillBridge', () => {
   });
 
   it('handles multiple sequential invocations on one connection', async () => {
-    const bridge = new PolyfillBridge();
+    const bridge = new McpBridge();
     bridge.register(echoTool);
     const config = await bridge.start();
 
