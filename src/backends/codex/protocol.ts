@@ -89,7 +89,12 @@ export type ThreadItem =
       aggregatedOutput: string | null;
       exitCode: number | null;
     }
-  | { type: 'fileChange'; id: string; status: unknown }
+  | {
+      type: 'fileChange';
+      id: string;
+      changes: Array<{ path: string; kind: string; diff: string }>;
+      status: 'inProgress' | 'completed' | 'failed' | 'declined';
+    }
   | {
       type: 'mcpToolCall';
       id: string;

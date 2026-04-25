@@ -51,11 +51,10 @@ export const write: Tool = {
 };
 
 /**
- * Find/replace edit. Claude's `Edit` shape — single `old_string` must match
- * exactly once. Codex has `apply_patch` (unified diff format) which is a
- * different shape, so `native.codex` is intentionally unset; users targeting
- * Codex get its native `apply_patch` regardless of whether they include this
- * tool in the list.
+ * Find/replace edit (Claude's `Edit` shape). Single `old_string` must match
+ * exactly once. Distinct from `applyPatch` (unified-diff format used by Codex)
+ * — they're different cognitive operations and models are trained on one or
+ * the other.
  */
 export const edit: Tool = {
   name: 'edit',
@@ -67,6 +66,26 @@ export const edit: Tool = {
   }),
   native: {
     claude: 'Edit',
+  },
+};
+
+/**
+ * Apply a unified-diff patch (Codex's `apply_patch` shape). Can span multiple
+ * files and multiple hunks. Distinct from `edit` — see edit's docstring.
+ *
+ * No polyfill is planned: models that don't natively speak unified-diff
+ * (everything except OpenAI's coding models) tend to be unreliable at it.
+ * Users wanting cross-backend file edits should prefer `edit`.
+ */
+export const applyPatch: Tool = {
+  name: 'applyPatch',
+  description:
+    'Apply a unified-diff patch. Can span multiple files and multiple hunks. The patch must be in standard unified-diff format.',
+  schema: z.object({
+    patch: z.string(),
+  }),
+  native: {
+    codex: 'apply_patch',
   },
 };
 
@@ -124,7 +143,19 @@ export const webSearch: Tool = {
 };
 
 /**
- * Default coding-agent toolbox. Convenience for the common case.
- * Equivalent to `[bash, read, write, edit, glob, grep, webFetch, webSearch]`.
+ * Default coding-agent toolbox. Convenience for the common case — both
+ * `edit` and `applyPatch` are included so the same `tools.all` works
+ * across Claude (uses edit) and Codex (uses applyPatch). Each backend
+ * exposes only what it natively supports.
  */
-export const all: Tool[] = [bash, read, write, edit, glob, grep, webFetch, webSearch];
+export const all: Tool[] = [
+  bash,
+  read,
+  write,
+  edit,
+  applyPatch,
+  glob,
+  grep,
+  webFetch,
+  webSearch,
+];

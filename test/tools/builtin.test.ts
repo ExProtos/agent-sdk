@@ -1,11 +1,22 @@
 import { describe, expect, it } from 'vitest';
-import { all, bash, edit, glob, grep, read, webFetch, webSearch, write } from '../../src/tools/builtin';
+import {
+  all,
+  applyPatch,
+  bash,
+  edit,
+  glob,
+  grep,
+  read,
+  webFetch,
+  webSearch,
+  write,
+} from '../../src/tools/builtin';
 import type { Tool } from '../../src/tools/types';
 
 describe('builtin tools', () => {
-  it('all is the canonical 8-tool set', () => {
-    expect(all).toEqual([bash, read, write, edit, glob, grep, webFetch, webSearch]);
-    expect(all).toHaveLength(8);
+  it('all is the canonical 9-tool set', () => {
+    expect(all).toEqual([bash, read, write, edit, applyPatch, glob, grep, webFetch, webSearch]);
+    expect(all).toHaveLength(9);
   });
 
   it('every tool has unique name', () => {
@@ -38,11 +49,13 @@ describe('native tool mappings', () => {
     grep: 'Grep',
     webFetch: 'WebFetch',
     webSearch: 'WebSearch',
+    // applyPatch intentionally unmapped on Claude
   };
   const expectedCodex: Record<string, string | undefined> = {
     bash: 'command/exec',
     read: 'fs/readFile',
     write: 'fs/writeFile',
+    applyPatch: 'apply_patch',
     // edit, glob, grep, webFetch, webSearch intentionally unmapped on Codex
   };
 
@@ -102,11 +115,17 @@ describe('schema validation', () => {
     expect(webSearch.schema.safeParse({ query: 'rust async runtimes' }).success).toBe(true);
     expect(webSearch.schema.safeParse({}).success).toBe(false);
   });
+
+  it('applyPatch requires patch string', () => {
+    expect(applyPatch.schema.safeParse({ patch: '--- a\n+++ b\n@@ -1 +1 @@\n-x\n+y\n' }).success).toBe(true);
+    expect(applyPatch.schema.safeParse({}).success).toBe(false);
+    expect(applyPatch.schema.safeParse({ patch: 42 }).success).toBe(false);
+  });
 });
 
 describe('Tool type guarantees', () => {
   it('every tool can be passed where a Tool is expected', () => {
-    const list: Tool[] = [bash, read, write, edit, glob, grep, webFetch, webSearch];
-    expect(list.length).toBe(8);
+    const list: Tool[] = [bash, read, write, edit, applyPatch, glob, grep, webFetch, webSearch];
+    expect(list.length).toBe(9);
   });
 });

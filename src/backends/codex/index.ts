@@ -314,11 +314,26 @@ export function translateItem(item: ThreadItem, queue: EventQueue): void {
     }
 
     case 'fileChange': {
-      const i = item as { id: string };
+      const i = item as {
+        id: string;
+        changes: Array<{ path: string; kind: string; diff: string }>;
+        status: 'inProgress' | 'completed' | 'failed' | 'declined';
+      };
       queue.push({
         type: 'tool_call_end',
-        toolCall: { id: i.id, name: 'fileChange', input: {} },
+        toolCall: { id: i.id, name: 'applyPatch', input: { changes: i.changes } },
       });
+      // Only surface a tool_result once the patch is settled.
+      if (i.status === 'completed' || i.status === 'failed' || i.status === 'declined') {
+        queue.push({
+          type: 'tool_result',
+          result: {
+            toolCallId: i.id,
+            output: { status: i.status, changes: i.changes },
+            isError: i.status !== 'completed',
+          },
+        });
+      }
       return;
     }
 

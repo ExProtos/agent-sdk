@@ -210,16 +210,62 @@ describe('translateItem', () => {
     expect(result).toMatchObject({ result: { output: '' } });
   });
 
-  it('emits tool_call_end for fileChange items', async () => {
+  it('emits tool_call_end + tool_result for completed fileChange items', async () => {
+    const changes = [{ path: 'src/x.ts', kind: 'modify', diff: '@@ -1 +1 @@\n-a\n+b\n' }];
     const events = await collectAsync({
       type: 'fileChange',
       id: 'fc-1',
-      status: { applied: true },
+      changes,
+      status: 'completed',
     } as ThreadItem);
 
     expect(events).toEqual([
-      { type: 'tool_call_end', toolCall: { id: 'fc-1', name: 'fileChange', input: {} } },
+      {
+        type: 'tool_call_end',
+        toolCall: { id: 'fc-1', name: 'applyPatch', input: { changes } },
+      },
+      {
+        type: 'tool_result',
+        result: { toolCallId: 'fc-1', output: { status: 'completed', changes }, isError: false },
+      },
     ]);
+  });
+
+  it('marks fileChange tool_result as error when status is failed', async () => {
+    const events = await collectAsync({
+      type: 'fileChange',
+      id: 'fc-2',
+      changes: [],
+      status: 'failed',
+    } as ThreadItem);
+
+    expect(events.find((e) => e.type === 'tool_result')).toMatchObject({
+      result: { isError: true },
+    });
+  });
+
+  it('marks fileChange tool_result as error when status is declined', async () => {
+    const events = await collectAsync({
+      type: 'fileChange',
+      id: 'fc-3',
+      changes: [],
+      status: 'declined',
+    } as ThreadItem);
+
+    expect(events.find((e) => e.type === 'tool_result')).toMatchObject({
+      result: { isError: true },
+    });
+  });
+
+  it('emits only tool_call_end for in-progress fileChange items', async () => {
+    const events = await collectAsync({
+      type: 'fileChange',
+      id: 'fc-4',
+      changes: [{ path: 'a.ts', kind: 'modify', diff: '...' }],
+      status: 'inProgress',
+    } as ThreadItem);
+
+    expect(events.map((e) => e.type)).toEqual(['tool_call_end']);
   });
 
   it('emits tool_call_end + tool_result for mcpToolCall', async () => {
