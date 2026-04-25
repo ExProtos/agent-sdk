@@ -12,3 +12,8 @@ export type {
 export type { Tool, ToolResultContent } from './tools/types.js';
 
 export { claude, ClaudeBackend, type ClaudeBackendOptions } from './backends/claude.js';
+export {
+  codex,
+  CodexBackend,
+  type CodexBackendOptions,
+} from './backends/codex/index.js';
