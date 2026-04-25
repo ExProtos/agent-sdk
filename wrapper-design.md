@@ -192,7 +192,9 @@ class VercelAgent implements UnifiedAgent {
 }
 ```
 
-In-process. Provider-agnostic at the *model* layer — you can use Claude, GPT, Gemini, etc. behind it. All tools polyfilled (Vercel ships none).
+In-process. Provider-agnostic at the *model* layer — you can use Claude, GPT, Gemini, **or any local model** behind it. All tools polyfilled (Vercel ships none).
+
+**This is the primary reason Vercel AI SDK is in the wrapper.** See [Local models](#local-models) below.
 
 ### CodexAgent
 
@@ -241,6 +243,65 @@ class CodexAgent implements UnifiedAgent {
 
 Subprocess. Stateful login flow. Custom tools via MCP server.
 
+## Local models
+
+**The primary motivation for including Vercel AI SDK.** It's the only one of the four backends with provider-agnostic model selection — `@ai-sdk/openai` and community providers can target any local server: Ollama, LM Studio, vLLM, llama.cpp, LocalAI, TGI, etc.
+
+### Why the others can't really do local
+
+| Backend | Local? | Notes |
+|---|---|---|
+| Claude Agent SDK | Limited | Only Ollama, via its Anthropic-API-compatible mode (`/v1/messages`). Not vLLM/LM Studio/llama.cpp. |
+| OpenAI Agents SDK | ❌ | Built on Responses API; almost no local server implements it. |
+| Codex | ❌ | Same — Responses API only. |
+| **Vercel AI SDK Agent** | **✅** | **Any provider — primary local-model path.** |
+
+### Limited tool set for local models
+
+Local models — even strong ones (Qwen 2.5 Coder 32B, DeepSeek V3, Llama 3.3 70B) — degrade much faster than frontier models on long agent loops with many tools. The wrapper should support **per-model tool profiles**:
+
+```typescript
+const agent = new Agent({
+  backend: 'vercel',
+  model: ollama('qwen2.5-coder:32b'),
+  tools: [tools.read, tools.write, tools.bash, tools.grep],  // small toolbox
+  toolProfile: 'local-coder',  // implies tighter limits + simplified tool descriptions
+  stopWhen: stepCountIs(15),    // tighter than the 50 we'd use for frontier
+});
+```
+
+Profiles affect:
+
+- **Toolbox size** — frontier models can juggle 20+ tools; local models do better with 4-6.
+- **Tool descriptions** — frontier models handle terse JSON-schema; local models often need more verbose, example-laden descriptions.
+- **Output formatting** — Claude is trained on its specific `Bash` truncation; local models need whatever shape they parse most reliably. Polyfilled tools should emit per-profile output formats.
+- **`stopWhen` limits** — local models fall into tool-call loops more easily. Cap aggressively.
+- **Tool-result size budgets** — clip outputs harder; local models lose track in long contexts faster than Claude/GPT.
+
+### Suggested profiles
+
+| Profile | Tools | Step cap | Output budget |
+|---|---|---|---|
+| `frontier` (default) | Full catalog | 50 | Generous |
+| `local-coder` | read, write, edit, bash, grep, glob | 15 | Tight |
+| `local-research` | webSearch, webFetch, read, write | 10 | Tight |
+| `local-minimal` | read, bash | 8 | Very tight |
+
+Profiles are opinionated defaults — the user can still pass an explicit `tools` array to override.
+
+### Practical advantages of the local path
+
+- **No subscription-OAuth or API ToS concerns at all.** Bypasses the whole `CLAUDE_CODE_OAUTH_TOKEN` / ChatGPT-OAuth gray area.
+- **Cost predictability** — free after hardware setup.
+- **Privacy** — data stays on-device.
+- **Offline capable.**
+
+### Trade-offs to document
+
+- Tool-use reliability is markedly worse than frontier models. Users should expect more failures and tighter loops.
+- Some agent patterns (heavy multi-step reasoning, complex tool chaining) may not work well at all on local models. Frontier-only escape hatch worth keeping.
+- Streaming behavior varies per server — some local servers stream tokens, some only stream completed messages.
+
 ## Build order
 
 1. **Event-stream normalization across all four** — the smallest abstraction with the biggest payoff. No polyfills required. Validates the design.
@@ -259,8 +320,9 @@ Subprocess. Stateful login flow. Custom tools via MCP server.
 ## What makes it worth doing
 
 The unique combination matrix nobody currently offers:
+- **Local models with the same agent code that runs against frontier APIs** (the primary motivation — only achievable via Vercel AI SDK as the backend)
 - Vercel's `useChat` rendering Claude Agent SDK output
-- Claude's prebuilt toolbox running under OpenAI's tracing dashboard  
+- Claude's prebuilt toolbox running under OpenAI's tracing dashboard
 - Codex's subscription auth with Claude's tool semantics on Vercel's UI layer
 - Provider portability for the model with backend portability for the agent runtime
 
