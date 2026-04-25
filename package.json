@@ -10,7 +10,9 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:e2e": "vitest run --config vitest.e2e.config.ts",
+    "test:all": "vitest run && vitest run --config vitest.e2e.config.ts"
   },
   "engines": {
     "node": ">=20.0.0"
