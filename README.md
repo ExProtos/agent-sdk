@@ -21,6 +21,7 @@ A single TypeScript library where you can write agent code once and run it on:
 | [codex-app-server.md](codex-app-server.md) | Codex AppServer protocol details (verified against the OpenAI Codex repo) |
 | [wrapper-design.md](wrapper-design.md) | Proposed architecture: unified event stream, tool catalog with polyfills, per-backend implementation sketches |
 | [auth-and-tos.md](auth-and-tos.md) | Subscription OAuth tokens (`CLAUDE_CODE_OAUTH_TOKEN`, ChatGPT-via-Codex) vs API keys — what's supported, what's gray-area |
+| [prior-art.md](prior-art.md) | Competitive analysis — `one-agent-sdk`, Rivet Sandbox Agent SDK, OpenClaw's Codex integration, Mastra, ACP, Pi, etc. Confirms gaps our wrapper would fill |
 
 ## TL;DR
 
@@ -33,3 +34,14 @@ A single TypeScript library where you can write agent code once and run it on:
 ## Status
 
 Research / design phase. No code yet.
+
+## Pre-build reading order
+
+Confirmed prior art exists; no exact match. Before writing code:
+
+1. **[OpenClaw](https://github.com/openclaw/openclaw)** `extensions/codex/src/app-server/` + `scripts/sync-codex-app-server-protocol.ts` — most directly relevant Codex AppServer integration.
+2. **[`one-agent-sdk`](https://github.com/odysa/one-agent-sdk)** — closest architectural twin for the multi-backend dispatch pattern.
+3. **[Rivet Sandbox Agent SDK](https://github.com/rivet-dev/sandbox-agent)** universal event schema — reference for our unified `AgentEvent` design.
+4. **[Pi](https://github.com/badlogic/pi-mono)** OAuth surface — the only existing TS thing with subscription auth across multiple providers.
+
+See [prior-art.md](prior-art.md) for the full analysis.

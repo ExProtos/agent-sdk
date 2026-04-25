@@ -91,6 +91,29 @@ Tokens persist in `$CODEX_HOME` (default `~/.codex/`) and are refreshed automati
 
 `OPENAI_API_KEY` from environment also works — Codex falls back to it if no logged-in account.
 
+## Don't use `@openai/codex-sdk`
+
+OpenAI publishes [`@openai/codex-sdk`](https://www.npmjs.com/package/@openai/codex-sdk) (active, near-daily releases). It is **not** a JSON-RPC client for `codex app-server` — it spawns the `codex` CLI with `exec --experimental-json` and parses JSONL events. Sealed against custom tool registration; no MCP API surface; auth is implicit via inherited `~/.codex/auth.json`.
+
+For our wrapper, going to `codex app-server` directly wins on:
+- Programmatic MCP/custom-tool registration
+- Explicit `account/login/start` OAuth surface
+- Full protocol-level event fidelity
+
+The only useful piece of `@openai/codex-sdk` for us is its transitive dep on `@openai/codex` (the CLI npm package), which resolves the per-platform native binary. We may depend on that **just for the binary resolution** and skip the SDK layer entirely.
+
+## Reference implementation: OpenClaw
+
+[OpenClaw](https://github.com/openclaw/openclaw) (Justin's other project, `~/src/openclaw`) integrates Codex AppServer directly via JSON-RPC. The relevant pieces:
+
+- `scripts/sync-codex-app-server-protocol.ts` — copies generated TypeScript types from a local clone of `openai/codex` (`codex-rs/app-server-protocol/schema/typescript`) into `extensions/codex/src/app-server/protocol-generated/`. Selectively pins specific JSON schemas (e.g. `v2/ThreadStartResponse.json`, `v2/TurnCompletedNotification.json`) and rewrites TS imports.
+- `scripts/check-codex-app-server-protocol.ts` — drift check.
+- `scripts/prepare-codex-ci-auth.ts`, `prepare-codex-ci-config.ts` — auth/config setup for live tests.
+- `scripts/test-live-codex-harness-docker.sh` — live integration test harness.
+- `extensions/codex/src/app-server/` — JSON-RPC client implementation.
+
+Read these before writing our Codex backend — they've already solved schema sync, lifecycle management, and live testing.
+
 ## Implications for the wrapper
 
 1. **Auth is a stateful flow, not a config value.** The wrapper's `CodexAgent` backend should expose `agent.login({ type, ... })` rather than pretending auth is an env var.

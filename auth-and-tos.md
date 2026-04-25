@@ -59,6 +59,19 @@ Both subscription OAuth paths are licensed for **personal interactive use**. The
 
 If the former → fine. If the latter → use an API key.
 
+### Real-world signal: Anthropic OAuth + Agent SDK
+
+Community thread: [anthropics/claude-agent-sdk-python#559](https://github.com/anthropics/claude-agent-sdk-python/issues/559) (closed, originally a feature request: "Agent SDK should support Max plan billing, not just API keys").
+
+Practical observations from the comments:
+
+- The `claude setup-token` + `CLAUDE_CODE_OAUTH_TOKEN` workaround **works** with the Agent SDK. Multiple users confirm.
+- One user reports usage now bills against **"additional usage allowance"** (subscription overflow / API spillover), so heavy use isn't free even when it works.
+- Another: *"using it in claude agent sdk harness for local development is fine"* — no charges, no enforcement.
+- **No bans reported in the thread.**
+
+Conservative reading: personal local-dev / single-user agent use on `CLAUDE_CODE_OAUTH_TOKEN` is fine and matches both the SDK's documented behavior and Anthropic's apparent enforcement posture. Heavy or multi-user use will at minimum start eating overflow billing, and at worst could trigger account action. Use API key for those.
+
 ## NanoClaw context
 
 NanoClaw uses `CLAUDE_CODE_OAUTH_TOKEN` by default and supports ChatGPT-via-Codex through its `/add-codex` skill. The architecture is fine; the ToS question is purely about *who* is on the receiving end of the agent's responses.
