@@ -109,6 +109,39 @@ At construction time, the wrapper picks native where available, polyfill where n
 
 Polyfills must match observable contract — clip output the same way, format errors the same way, respect timeouts the same way. Models are *trained on* specific tool behaviors. A polyfill that returns 200KB of stdout when Claude's native `Bash` would return 30KB-truncated will cause the model to behave differently. This is where the maintenance pain lives.
 
+### Native tools run as your host user — `sandbox` forces polyfill mode
+
+Important execution-model detail (verified against the [Claude Agent SDK permissions docs](https://code.claude.com/docs/en/agent-sdk/permissions)): Claude Agent SDK runs all built-in tools **in-process with host user permissions**. `Bash` calls actually `exec` in your Node process; `Write` calls actually `fs.writeFile`. The "sandbox" in the SDK's permission system is a *permission-prompt layer*, not OS-level isolation.
+
+Implication: if the wrapper exposes a `sandbox` option, it must override native-tool resolution. When `sandbox` is set, the wrapper:
+
+1. Adds the affected tool name to `disallowedTools` on the backend (blocks Claude's native `Bash`).
+2. Registers the polyfilled version via in-process MCP, routed through the configured sandbox runtime (Docker, Firecracker, Pyodide, etc.).
+
+```typescript
+const agent = new Agent({
+  backend: 'claude',
+  tools: [tools.bash],
+  sandbox: sandbox.docker({ image: 'python:3.12' }),
+});
+// Effective config passed to Claude Agent SDK:
+//   disallowedTools: ['Bash']
+//   mcpServers: { wrapper: { ... in-process MCP exposing 'bash' ... } }
+```
+
+This means `sandbox` is a **per-tool** decision, not a global one. Tools without dangerous side effects (`Read`, `Glob`, `Grep`) can stay native; tools that touch the shell or filesystem aggressively (`Bash`, `Write`, `Edit`) get force-polyfilled when `sandbox` is set.
+
+### Wrapper hook layer
+
+For backends that support hooks (Claude, OpenAI), the wrapper installs a `PreToolUse` hook that fires for every tool call — native or polyfilled. This is the wrapper's only universal interception point for:
+
+- Audit logging
+- Per-call permission prompts (when running unattended is not desired)
+- Tool-result sanitization (post-call, via `PostToolUse`)
+- Profile-based step caps
+
+Codex's equivalent is the `permission.*` notification stream over JSON-RPC. Vercel AI SDK Agent doesn't have hooks; the wrapper has to wrap the tool handlers themselves at registration time.
+
 ## What NOT to unify
 
 | Concern | Reason | Mitigation |

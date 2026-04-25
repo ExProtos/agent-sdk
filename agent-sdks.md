@@ -44,6 +44,25 @@ These are the things the wrapper can normalize cleanly.
 - **Hosted tool semantics** — OpenAI's `code_interpreter` runs in their infrastructure; everyone else runs locally.
 - **Session resume cost** — Claude and Codex restore from disk (cheap, prompt-cache friendly); OpenAI threads requests via `previous_response_id`; Vercel replays history.
 
+## Tool execution model
+
+How tools actually run on each backend — important for the wrapper's polyfill and sandbox layers.
+
+| Backend | Tool execution location | Sandboxing | Custom tools |
+|---|---|---|---|
+| **Claude Agent SDK** | In-process, host user permissions. `Bash` → `child_process.exec`; `Write` → `fs.writeFile`. No subprocess to claude-code CLI. | **None.** Permission system is prompts/allowlists, not OS isolation. | In-process via `createSdkMcpServer()`. External MCP servers spawn subprocesses. |
+| **OpenAI Agents SDK** | In-process for custom/local tools; OpenAI's infrastructure for hosted tools (`code_interpreter`, `computer_use`, `file_search`). | Hosted tools are sandboxed by OpenAI; local tools are not. | In-process via tool definitions + MCP. |
+| **Vercel AI SDK Agent** | In-process. Tools are functions you register. | None unless you add it. | All tools are custom. |
+| **Codex AppServer** | Subprocess (Codex's Rust binary). `command/exec` runs through Codex's own executor. macOS uses `sandbox-exec`; Linux uses Codex's permission allowlist. | **Yes** — Codex provides actual sandboxing per platform. | Via MCP server registration in config. |
+
+### Wrapper implications
+
+1. **Sandboxing is opt-in and *forces polyfill*.** When the wrapper's `sandbox` option is set, native `Bash` (Claude) or local-tool execution (OpenAI/Vercel) gets disabled in favor of a polyfilled version routed through the configured sandbox runtime. Codex is the exception — its native sandbox already provides the isolation.
+
+2. **In-process custom tools are universal.** All four backends route custom MCP tools through an in-process handler in the wrapper's Node process. This means polyfills run wherever the wrapper runs — same `cwd`, same env, same permissions.
+
+3. **The hook layer is uneven.** Claude Agent SDK has rich hooks (`PreToolUse`, `PostToolUse`, etc.); OpenAI Agents SDK has lifecycle callbacks; Codex has `permission.*` notifications; Vercel AI SDK Agent has no hooks (the wrapper has to intercept at the tool-handler boundary instead).
+
 ## Vercel AI SDK note
 
 I initially called Vercel AI SDK "creeping into the agent space" — that was out of date. As of v5 it ships an actual `Agent` class with `stopWhen`, `prepareStep`, multi-step tool calls, and structured outputs. It's a genuine peer to the dedicated agent SDKs, just one that doesn't ship a prebuilt code-agent toolbox.
