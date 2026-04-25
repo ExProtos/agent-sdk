@@ -53,7 +53,7 @@ interface UnifiedAgent {
 Public API wraps this:
 
 ```typescript
-import { Agent, tools, sandbox } from 'unified-agent';
+import { Agent, tools } from 'unified-agent';
 
 const agent = new Agent({
   backend: 'claude' | 'openai' | 'vercel' | 'codex',
@@ -61,9 +61,8 @@ const agent = new Agent({
   tools: [
     tools.read, tools.write, tools.bash,
     tools.webSearch({ provider: 'tavily' }),
-    tools.codeInterpreter({ runtime: 'pyodide' }),
   ],
-  sandbox: sandbox.docker({ image: 'python:3.12' }),
+  cwd: process.cwd(),
   // escape hatches
   claude: { /* SDK-specific options */ },
   openai: { /* ... */ },
@@ -71,6 +70,8 @@ const agent = new Agent({
   codex: { /* ... */ },
 });
 ```
+
+**Sandboxing is out of scope.** The wrapper does not spawn Docker, Firecracker, Pyodide, or any other isolation runtime. If you need isolation, run the entire Node process inside a container (NanoClaw-style). See [Sandboxing](#sandboxing) below.
 
 ## Tool catalog with native-or-polyfill resolution
 
@@ -85,7 +86,8 @@ defineTool({
     vercel: null,
   },
   polyfill: async ({ command, timeout }) => {
-    return await sandbox.exec(command, { timeout });
+    const { stdout, stderr } = await execFile('sh', ['-c', command], { timeout });
+    return { stdout, stderr };
   },
 });
 ```
@@ -97,11 +99,11 @@ At construction time, the wrapper picks native where available, polyfill where n
 | Tool | Claude | Codex | OpenAI | Vercel | Polyfill |
 |---|---|---|---|---|---|
 | `read` / `write` / `edit` | ✅ | ✅ | — | — | `fs/promises` |
-| `bash` | ✅ | ✅ | — | — | `child_process` / Docker |
+| `bash` | ✅ | ✅ | — | — | `child_process` |
 | `glob` / `grep` | ✅ | — | — | — | `fast-glob` / ripgrep |
 | `web_search` | ✅ | — | ✅ | — | Tavily / Brave / Serper |
 | `web_fetch` | ✅ | — | — | — | `fetch` + readability |
-| `code_interpreter` | — | — | ✅ | — | Pyodide / Docker+Python |
+| `code_interpreter` | — | — | ✅ | — | Native only — no polyfill (would require sandboxing the wrapper doesn't ship) |
 | `file_search` (RAG) | — | — | ✅ | — | LanceDB / Turbopuffer + embeddings |
 | `computer_use` | ✅ Anthropic | — | ✅ OpenAI | — | Browserbase / Anchor + protocol shim |
 
@@ -109,27 +111,26 @@ At construction time, the wrapper picks native where available, polyfill where n
 
 Polyfills must match observable contract — clip output the same way, format errors the same way, respect timeouts the same way. Models are *trained on* specific tool behaviors. A polyfill that returns 200KB of stdout when Claude's native `Bash` would return 30KB-truncated will cause the model to behave differently. This is where the maintenance pain lives.
 
-### Native tools run as your host user — `sandbox` forces polyfill mode
+## Sandboxing
 
-Important execution-model detail (verified against the [Claude Agent SDK permissions docs](https://code.claude.com/docs/en/agent-sdk/permissions)): Claude Agent SDK runs all built-in tools **in-process with host user permissions**. `Bash` calls actually `exec` in your Node process; `Write` calls actually `fs.writeFile`. The "sandbox" in the SDK's permission system is a *permission-prompt layer*, not OS-level isolation.
+**The wrapper does not provide sandboxing.** Native tools (Claude's `Bash`, polyfilled `bash` via `child_process`, etc.) execute in the wrapper's Node process with host user permissions. If you need isolation, the deployment is responsible for it.
 
-Implication: if the wrapper exposes a `sandbox` option, it must override native-tool resolution. When `sandbox` is set, the wrapper:
+### What each backend gives you natively
 
-1. Adds the affected tool name to `disallowedTools` on the backend (blocks Claude's native `Bash`).
-2. Registers the polyfilled version via in-process MCP, routed through the configured sandbox runtime (Docker, Firecracker, Pyodide, etc.).
+| Backend | Native sandboxing |
+|---|---|
+| Claude Agent SDK | None — the SDK's "sandbox" is a permission-prompt layer, not OS isolation. `Bash` actually `exec`s in your process. ([source](https://code.claude.com/docs/en/agent-sdk/permissions)) |
+| OpenAI Agents SDK | Hosted tools (`code_interpreter`, `computer_use`) run in OpenAI's infrastructure. Local tools — none. |
+| Vercel AI SDK Agent | None. Tools are functions you register; they run wherever your code runs. |
+| Codex AppServer | macOS: `sandbox-exec`. Linux: Codex's own permission allowlist. Real isolation, configurable via `sandboxMode`. |
 
-```typescript
-const agent = new Agent({
-  backend: 'claude',
-  tools: [tools.bash],
-  sandbox: sandbox.docker({ image: 'python:3.12' }),
-});
-// Effective config passed to Claude Agent SDK:
-//   disallowedTools: ['Bash']
-//   mcpServers: { wrapper: { ... in-process MCP exposing 'bash' ... } }
-```
+### How to actually sandbox
 
-This means `sandbox` is a **per-tool** decision, not a global one. Tools without dangerous side effects (`Read`, `Glob`, `Grep`) can stay native; tools that touch the shell or filesystem aggressively (`Bash`, `Write`, `Edit`) get force-polyfilled when `sandbox` is set.
+Run the wrapper inside a container at deployment time. Docker, Firecracker, Apple Container, Linux user namespaces — whatever fits the deployment. The wrapper sees a "normal" filesystem and shell; the host sees an isolated process tree.
+
+This is how NanoClaw and OpenClaw both work — the agent runtime runs in a per-session container, with the host orchestrating. The agent code itself doesn't know it's sandboxed.
+
+Trying to do it the other way (wrapper spawns Docker from inside Node, mounts volumes, copies files in/out) gets ugly fast: cross-mount permissions, container lifecycle bleeding into agent lifecycle, performance overhead per tool call, host paths leaking through error messages. None of this is the wrapper's job.
 
 ### Wrapper hook layer
 

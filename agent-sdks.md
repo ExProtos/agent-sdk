@@ -10,7 +10,7 @@ The four candidate backends.
 | **Provider lock-in** | Anthropic only | OpenAI only | Provider-agnostic (`@ai-sdk/anthropic`, `@ai-sdk/openai`, etc.) | OpenAI only |
 | **Subscription auth** | ✅ `CLAUDE_CODE_OAUTH_TOKEN` | ❌ API key only | ❌ Whatever provider accepts | ✅ ChatGPT OAuth via `account/login/start` |
 | **In-process or subprocess** | In-process | In-process | In-process | Subprocess (JSON-RPC) |
-| **Prebuilt code-agent tools** (Read/Write/Edit/Bash/Grep) | ✅ Rich, sandboxed | ❌ | ❌ BYO | ✅ `command/exec`, `fs/readFile`, `fs/writeFile`, `apply_patch` |
+| **Prebuilt code-agent tools** (Read/Write/Edit/Bash/Grep) | ✅ Rich (in-process, not sandboxed) | ❌ | ❌ BYO | ✅ `command/exec`, `fs/readFile`, `fs/writeFile`, `apply_patch` (sandboxed) |
 | **Hosted tools** | Web search/fetch | `web_search`, `file_search`, `code_interpreter`, `computer_use` | None | None (uses local) |
 | **MCP support** | ✅ | ✅ | Partial | ✅ |
 | **Session resume** | ✅ Native (cache-friendly) | Via `previous_response_id` chain | ❌ BYO history | ✅ `thread/resume` |
@@ -57,7 +57,7 @@ How tools actually run on each backend — important for the wrapper's polyfill 
 
 ### Wrapper implications
 
-1. **Sandboxing is opt-in and *forces polyfill*.** When the wrapper's `sandbox` option is set, native `Bash` (Claude) or local-tool execution (OpenAI/Vercel) gets disabled in favor of a polyfilled version routed through the configured sandbox runtime. Codex is the exception — its native sandbox already provides the isolation.
+1. **Sandboxing is the deployment's responsibility, not the wrapper's.** Tools execute in-process; if you want isolation, run the wrapper inside a container (NanoClaw/OpenClaw do this). Codex is the exception — it ships real per-platform sandboxing and the wrapper passes through `sandboxMode` as an escape hatch.
 
 2. **In-process custom tools are universal.** All four backends route custom MCP tools through an in-process handler in the wrapper's Node process. This means polyfills run wherever the wrapper runs — same `cwd`, same env, same permissions.
 
