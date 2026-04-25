@@ -147,6 +147,14 @@ export class ClaudeBackend implements Backend {
           if (aborted) return;
           yield { type: 'activity' };
           yield* translateMessage(message, nameMap);
+          // SDK keeps its async iterator alive as long as the input stream
+          // is open (so callers can push() more messages mid-conversation).
+          // For our turn-scoped query model, the 'result' message means
+          // the model is done — close the input so the SDK iterator
+          // terminates cleanly.
+          if (message.type === 'result') {
+            stream.end();
+          }
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
