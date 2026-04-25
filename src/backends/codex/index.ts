@@ -122,25 +122,30 @@ export class CodexBackend implements Backend {
     let activeThreadId: string | undefined = input.continuation;
 
     const start = async () => {
-      const client = await this.ensureClient();
-      const bridgeConfig = await this.ensureBridge();
-
-      // Verify auth before doing anything else.
-      const account = await client.request<GetAccountResponse>('account/read', {});
-      if (!account.account) {
-        queue.push({ type: 'error', message: new CodexAuthRequiredError().message, retryable: false });
-        queue.end();
-        return;
-      }
-
-      // Wire notifications → events for this turn.
-      const detach = client.onNotification((notif) =>
-        translateNotification(notif, activeThreadId, queue),
-      );
-
-      const codexConfig = buildCodexConfig(bridgeConfig);
-
+      let detach: (() => void) | null = null;
       try {
+        const client = await this.ensureClient();
+        const bridgeConfig = await this.ensureBridge();
+
+        // Verify auth before doing anything else.
+        const account = await client.request<GetAccountResponse>('account/read', {});
+        if (!account.account) {
+          queue.push({
+            type: 'error',
+            message: new CodexAuthRequiredError().message,
+            retryable: false,
+          });
+          queue.end();
+          return;
+        }
+
+        // Wire notifications → events for this turn.
+        detach = client.onNotification((notif) =>
+          translateNotification(notif, activeThreadId, queue),
+        );
+
+        const codexConfig = buildCodexConfig(bridgeConfig);
+
         // Start or resume thread.
         if (input.continuation) {
           const resp = await client.request<ThreadResumeResponse>('thread/resume', {
@@ -184,21 +189,18 @@ export class CodexBackend implements Backend {
 
         // Wait for turn/completed — translateNotification ends the queue.
       } catch (err) {
-        if (err instanceof CodexRpcError) {
-          queue.push({ type: 'error', message: err.message, retryable: false });
-        } else {
-          queue.push({
-            type: 'error',
-            message: err instanceof Error ? err.message : String(err),
-            retryable: false,
-          });
-        }
+        const message =
+          err instanceof CodexRpcError
+            ? err.message
+            : err instanceof Error
+              ? err.message
+              : String(err);
+        queue.push({ type: 'error', message, retryable: false });
         queue.end();
       } finally {
-        // Note: we keep `detach` alive until queue.end() is awaited by the
-        // consumer. Cleanup happens in events() generator below.
-        // We attach the detach cleanup to the queue's end callback.
-        queue.onEnd(detach);
+        // Detach notification handler whenever the queue eventually ends
+        // (model finished, error, or abort). If we never attached, no-op.
+        if (detach) queue.onEnd(detach);
       }
     };
 
