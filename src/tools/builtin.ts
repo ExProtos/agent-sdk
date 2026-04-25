@@ -90,21 +90,34 @@ export const applyPatch: Tool = {
   },
 };
 
+/**
+ * Find files matching a glob pattern. Claude has it as a dedicated `Glob`
+ * tool. Codex doesn't have a dedicated tool — its model uses bash (find,
+ * ls, etc.) via command/exec. Marking native.codex='command/exec' so the
+ * Codex backend doesn't try to polyfill (we'd just shadow what bash already
+ * does well, and the model is trained to reach for bash anyway).
+ */
 export const glob: Tool = {
   name: 'glob',
-  description: 'Find files matching a glob pattern. Claude-only.',
+  description: 'Find files matching a glob pattern.',
   schema: z.object({
     pattern: z.string(),
     path: z.string().optional(),
   }),
   native: {
     claude: 'Glob',
+    codex: 'command/exec',
   },
 };
 
+/**
+ * Search file contents. Claude has a dedicated `Grep` tool. Codex doesn't,
+ * but its model is heavily trained on bash-based grep/rg via command/exec.
+ * Same reasoning as glob — don't polyfill, let Codex use shell.
+ */
 export const grep: Tool = {
   name: 'grep',
-  description: 'Search file contents with a regex pattern. Claude-only.',
+  description: 'Search file contents with a regex pattern.',
   schema: z.object({
     pattern: z.string(),
     path: z.string().optional(),
@@ -112,6 +125,7 @@ export const grep: Tool = {
   }),
   native: {
     claude: 'Grep',
+    codex: 'command/exec',
   },
 };
 
