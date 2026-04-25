@@ -19,7 +19,7 @@ import {
   collectEvents,
   continuationFromEvents,
   toolCalls,
-} from './_helpers';
+} from './helpers';
 
 describe.skipIf(!codexE2eEnabled)('Codex end-to-end', () => {
   it('completes a trivial query', async () => {

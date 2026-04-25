@@ -5,7 +5,7 @@ export default defineConfig({
     include: ['test/e2e/**/*.e2e.test.ts'],
     environment: 'node',
     // Loads .env.test before any test runs (overridable via AGENT_SDK_ENV_FILE).
-    setupFiles: ['test/e2e/_setup.ts'],
+    setupFiles: ['test/e2e/setup.ts'],
     // E2E tests hit real APIs and may be slow.
     testTimeout: 120_000,
     hookTimeout: 30_000,

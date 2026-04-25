@@ -20,7 +20,7 @@ import {
   continuationFromEvents,
   hasAnthropicAuth,
   toolCalls,
-} from './_helpers';
+} from './helpers';
 
 describe.skipIf(!hasAnthropicAuth)('Claude end-to-end', () => {
   it('completes a trivial query and emits a coherent event sequence', async () => {
