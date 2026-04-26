@@ -38,6 +38,9 @@ export function claudeOAuthPreferredEnv(): Record<string, string | undefined> | 
  */
 export const codexE2eEnabled = process.env.AGENT_SDK_CODEX_E2E === '1';
 
+/** True if env has OPENAI_API_KEY (required for the @openai/agents SDK). */
+export const hasOpenAIApiKey = !!process.env.OPENAI_API_KEY;
+
 /** Drain an AgentQuery's events into an array. */
 export async function collectEvents(query: AgentQuery): Promise<AgentEvent[]> {
   const events: AgentEvent[] = [];

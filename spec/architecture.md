@@ -2,7 +2,7 @@
 
 ## Overview
 
-`agent-sdk` is a thin TypeScript layer over multiple agent runtimes — Claude Agent SDK, Codex AppServer, and Vercel AI SDK today, with OpenAI Agents SDK planned. The wrapper does **not** reimplement an agent loop. It delegates to each backend's own runtime and only normalizes what each backend exposes.
+`agent-sdk` is a thin TypeScript layer over multiple agent runtimes — Claude Agent SDK, Codex AppServer, Vercel AI SDK, and OpenAI Agents SDK. The wrapper does **not** reimplement an agent loop. It delegates to each backend's own runtime and only normalizes what each backend exposes.
 
 It exists for three reasons:
 
@@ -238,19 +238,19 @@ Per-tool details are in [tools.md](tools.md).
 
 ## Backend behavior summary
 
-| | Claude (`@anthropic-ai/claude-agent-sdk`) | Codex (`codex app-server` JSON-RPC) | Vercel (`ai`) |
-|---|---|---|---|
-| Agent loop | Delegated to SDK | Delegated to AppServer | Delegated to `streamText` |
-| Native tools | Selected by `allowedTools` (wire names from `Tool.native.claude`) | Built-ins fire automatically; `Tool.native.codex` is informational | None — `native.*` ignored |
-| Custom tools | In-process via `createSdkMcpServer` (closures stay local) | Routed through MCP bridge (subprocess shim + Unix socket) | Wrapped via AI SDK `tool()` helper directly |
-| Continuation | Session UUID from `system/init` message | Thread ID from `thread/start` response (`{thread:{id}}`) | Minted UUID; persisted as JSONL under `<cwd>/.agent-sdk/sessions/` |
-| Streaming | `text_end` / `thinking_end` / `tool_call_end` only (coarse) | `text_delta` / `thinking_delta` (streaming) + `*_end` | `text_delta` / `thinking_delta` (streaming) + `*_end` |
-| Auth | `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` (env, read by SDK) | `~/.codex/auth.json` (from `codex login`) or `OPENAI_API_KEY` (env) | Provider-dependent (varies by `LanguageModel`) |
-| `push()` mid-turn | Supported (SDK has a streaming user-message iterator) | Not supported — `push` errors; caller should `end()` + `run()` with continuation | Supported via internal queue + chained `streamText` turns |
-| Subprocess | None | One `codex app-server` per backend instance, lazily spawned, killed on `close()` | None |
-| Persistence | SDK-native (`~/.claude/projects/`) | SDK-native (`~/.codex/sessions/` + sqlite index) | We own it (UIMessage[] JSONL — see Persistence below) |
+| | Claude (`@anthropic-ai/claude-agent-sdk`) | Codex (`codex app-server` JSON-RPC) | Vercel (`ai`) | OpenAI Agents (`@openai/agents`) |
+|---|---|---|---|---|
+| Agent loop | Delegated to SDK | Delegated to AppServer | Delegated to `streamText` | Delegated to SDK `run()` |
+| Native tools | Selected by `allowedTools` (wire names from `Tool.native.claude`) | Built-ins fire automatically; `Tool.native.codex` is informational | None — `native.*` ignored | Hosted tools (`webSearch`, `fileSearch`, `codeInterpreter`, `computerUse`, `imageGeneration`) selected via `Tool.hosted.openai`; `native.*` ignored |
+| Custom tools | In-process via `createSdkMcpServer` (closures stay local) | Routed through MCP bridge (subprocess shim + Unix socket) | Wrapped via AI SDK `tool()` helper directly | Wrapped via SDK's `tool()` helper directly |
+| Continuation | Session UUID from `system/init` message | Thread ID from `thread/start` response (`{thread:{id}}`) | Minted UUID; persisted as JSONL under `<cwd>/.agent-sdk/sessions/` | Minted UUID for memory/JSONL; OpenAI conversation ID when `useConversations: true` |
+| Streaming | `text_end` / `thinking_end` / `tool_call_end` only (coarse) | `text_delta` / `thinking_delta` (streaming) + `*_end` | `text_delta` / `thinking_delta` (streaming) + `*_end` | `text_delta` / `thinking_delta` (streaming) + `*_end` |
+| Auth | `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` (env, read by SDK) | `~/.codex/auth.json` (from `codex login`) or `OPENAI_API_KEY` (env) | Provider-dependent (varies by `LanguageModel`) | `OPENAI_API_KEY` (env, read by SDK) |
+| `push()` mid-turn | Supported (SDK has a streaming user-message iterator) | Not supported — `push` errors; caller should `end()` + `run()` with continuation | Supported via internal queue + chained `streamText` turns | Not supported — `push` errors; caller should `end()` + `run()` with continuation |
+| Subprocess | None | One `codex app-server` per backend instance, lazily spawned, killed on `close()` | None | None |
+| Persistence | SDK-native (`~/.claude/projects/`) | SDK-native (`~/.codex/sessions/` + sqlite index) | We own it (UIMessage[] JSONL — see Persistence below) | Memory-only by default; opt-in JSONL via `sessionsDir` (our `JsonlSession` impl, AgentInputItem[]); opt-in OpenAI Conversations |
 
-Per-backend wire details are in [backends/claude.md](backends/claude.md), [backends/codex.md](backends/codex.md), and [backends/vercel.md](backends/vercel.md).
+Per-backend wire details are in [backends/claude.md](backends/claude.md), [backends/codex.md](backends/codex.md), [backends/vercel.md](backends/vercel.md), and [backends/openai-agents.md](backends/openai-agents.md).
 
 ## Custom tools across backends
 
@@ -353,7 +353,7 @@ The Codex backend explicitly verifies auth on each `query()` by calling `account
 - `type: "module"` (ESM throughout).
 - `engines.node`: ≥ 20.
 - `tsconfig.json`: bundler resolution, target ES2022, no `.js` import suffixes (see [build.md](build.md)).
-- Direct dependencies: `@anthropic-ai/claude-agent-sdk`, `@modelcontextprotocol/sdk`, `ai` (Vercel backend's runtime), `zod` (4.x), `tsx` (runtime — needed to load `mcp-shim.ts` from source when consumers `tsx` our package), `glob` (used by tool implementations).
+- Direct dependencies: `@anthropic-ai/claude-agent-sdk`, `@modelcontextprotocol/sdk`, `ai` (Vercel backend's runtime), `@openai/agents` (OpenAI Agents backend's runtime; transitively brings `@openai/agents-openai` for hosted tools, Conversations, and compaction), `zod` (4.x), `tsx` (runtime — needed to load `mcp-shim.ts` from source when consumers `tsx` our package), `glob` (used by tool implementations).
 - AI SDK provider packages (`@ai-sdk/anthropic`, `@ai-sdk/openai`, `@ai-sdk/openai-compatible`, etc.) are NOT direct deps — caller installs whichever providers they want and passes the resulting `LanguageModel` to `vercel({ model })`.
 - Codex AppServer is invoked as the `codex` CLI on `PATH` — not an npm dependency.
 
@@ -362,7 +362,7 @@ The Codex backend explicitly verifies auth on each `query()` by calling `account
 - ✅ Claude Agent SDK backend — native tools + custom tools via SDK in-process MCP; `*_end`-only events
 - ✅ Codex AppServer backend — native tools + custom tools via subprocess MCP bridge; streaming deltas; native browsing → canonical `webSearch`/`webFetch` events
 - ✅ Vercel AI SDK backend — provider-agnostic model selection (incl. local via openai-compatible); JSONL persistence (UIMessage) with auto-reload; sub-agent (`task`) and todo state (with `prepareStep` injection) implemented in-backend
-- 🚧 OpenAI Agents SDK backend — see [backends/openai-agents.md](backends/openai-agents.md). Separate from Codex; adds OpenAI's hosted tools (Code Interpreter, Computer Use, file_search) and built-in tracing for API-key users. JSONL persistence via SDK's `Session` interface.
+- ✅ OpenAI Agents SDK backend — see [backends/openai-agents.md](backends/openai-agents.md). Separate from Codex; adds OpenAI's hosted tools (Code Interpreter, Computer Use, file_search, web_search, image_generation) and built-in tracing for API-key users. JSONL persistence via SDK's `Session` interface; opt-in Conversations API and auto-compaction.
 
 Open follow-ups (see `docs/todo.md`):
 - Codex tool disabling via TOML config passthrough

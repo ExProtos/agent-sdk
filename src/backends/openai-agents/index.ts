@@ -1,0 +1,771 @@
+/**
+ * OpenAI Agents backend — wraps `@openai/agents`.
+ *
+ * Separate from the Codex backend even though both target OpenAI models:
+ * this one is the API-key path with hosted tools (web_search, file_search,
+ * code_interpreter, computer_use, image_generation) and built-in tracing;
+ * Codex is the ChatGPT-subscription path through `codex app-server`.
+ *
+ * v0 scope:
+ * - One Agent per backend instance, built at construction time
+ * - Hosted tools dispatched server-side via `Tool.hosted.openai`
+ * - Function tools wrapped via SDK's `tool({...})` helper; closures run in-process
+ * - Special-cases for `task` (closure-bound child Agent) and `todo`
+ *   (callModelInputFilter re-injects todos into instructions per step)
+ * - Continuation via SDK's Session abstraction:
+ *     - `useConversations: true` → server-side OpenAIConversationsSession
+ *     - `sessionsDir` set        → JsonlSession (our impl) at <dir>/<id>.jsonl
+ *     - neither                  → MemorySession (lost on process exit)
+ * - Optional auto-compaction via `autoCompact: true` (wraps non-Conversations
+ *   session in OpenAIResponsesCompactionSession)
+ * - No mid-turn push() — same as Codex; `run()` is single-turn-shaped
+ */
+import { randomUUID } from 'node:crypto';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import {
+  Agent,
+  MemorySession,
+  OpenAIConversationsSession,
+  OpenAIResponsesCompactionSession,
+  RunAgentUpdatedStreamEvent,
+  RunItemStreamEvent,
+  RunRawModelStreamEvent,
+  Usage,
+  run,
+  tool,
+  type AgentInputItem,
+  type ModelSettings,
+  type Session,
+  type Tool as SdkTool,
+} from '@openai/agents';
+import { z } from 'zod';
+import type {
+  AgentEvent,
+  AgentQuery,
+  Backend,
+  QueryInput,
+  StopReason,
+  TokenUsage,
+} from '../../types';
+import type { Tool } from '../../tools/types';
+
+// ── Public API ──
+
+export interface OpenAIAgentsBackendOptions {
+  /** Required. OpenAI model name (e.g. 'gpt-5', 'gpt-4.1'). */
+  model: string;
+  /**
+   * Tools to expose. Resolved per `Tool.hosted.openai` / `Tool.execute` /
+   * special-cases for `task` and `todo`. Tools without a path are silently
+   * skipped — same posture as Vercel.
+   */
+  tools?: Tool[];
+  /** System prompt. Mapped to Agent.instructions. */
+  instructions?: string;
+  /** Pass-through model settings (temperature, top_p, …). */
+  modelSettings?: ModelSettings;
+  /** Maximum agent turns. Defaults to 20. */
+  maxTurns?: number;
+  /**
+   * Decide which tools a sub-agent (the `task` tool) gets when spawned.
+   * Receives the model-supplied `subagent_type` hint (Claude convention;
+   * empty string if absent). Default: every parent tool except `task`
+   * itself — single-level delegation, no recursive spawning.
+   */
+  subagentTools?: (subagent_type: string) => Tool[];
+  /**
+   * If set, persist conversation history to <sessionsDir>/<continuation>.jsonl
+   * via our JsonlSession impl. If unset, conversations live in memory only
+   * and are lost on process exit. Mutually exclusive with `useConversations`.
+   */
+  sessionsDir?: string;
+  /**
+   * If true, use OpenAI's hosted Conversations API for continuation.
+   * Continuation token = OpenAI conversation ID (server-side). Mutually
+   * exclusive with `sessionsDir` and `autoCompact`. Default false.
+   */
+  useConversations?: boolean;
+  /**
+   * If true, wrap the underlying session in OpenAIResponsesCompactionSession
+   * to auto-compact when history grows. Mutually exclusive with
+   * `useConversations`. Default false.
+   */
+  autoCompact?: boolean;
+}
+
+const DEFAULT_MAX_TURNS = 20;
+const ZERO_USAGE: TokenUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+const STALE_SESSION_RE =
+  /conversation.*not found|session.*not found|no such (conversation|session)/i;
+
+export class OpenAIAgentsBackend implements Backend {
+  readonly name = 'openai-agents';
+
+  private readonly model: string;
+  private readonly instructions: string | undefined;
+  private readonly modelSettings: ModelSettings | undefined;
+  private readonly maxTurns: number;
+  private readonly sessionsDir: string | undefined;
+  private readonly useConversations: boolean;
+  private readonly autoCompact: boolean;
+  private readonly subagentToolsFor: (subagent_type: string) => Tool[];
+
+  private readonly agent: Agent;
+  private readonly canonicalByWireName = new Map<string, string>();
+  private readonly hasTodoTool: boolean;
+  private readonly todosByContinuation = new Map<string, unknown>();
+  private readonly sessions = new Map<string, Session>();
+
+  constructor(options: OpenAIAgentsBackendOptions) {
+    if (options.useConversations && options.sessionsDir !== undefined) {
+      throw new Error(
+        'OpenAIAgentsBackend: useConversations and sessionsDir are mutually exclusive',
+      );
+    }
+    if (options.useConversations && options.autoCompact) {
+      throw new Error(
+        'OpenAIAgentsBackend: useConversations and autoCompact are mutually exclusive',
+      );
+    }
+
+    this.model = options.model;
+    this.instructions = options.instructions;
+    this.modelSettings = options.modelSettings;
+    this.maxTurns = options.maxTurns ?? DEFAULT_MAX_TURNS;
+    this.sessionsDir = options.sessionsDir;
+    this.useConversations = options.useConversations ?? false;
+    this.autoCompact = options.autoCompact ?? false;
+
+    const parentTools = options.tools ?? [];
+    this.hasTodoTool = parentTools.some((t) => t.name === 'todo');
+    this.subagentToolsFor =
+      options.subagentTools ?? ((_: string) => parentTools.filter((p) => p.name !== 'task'));
+
+    const sdkTools = this.buildSdkTools(parentTools);
+
+    this.agent = new Agent({
+      name: 'agent-sdk',
+      ...(this.instructions !== undefined && { instructions: this.instructions }),
+      model: this.model,
+      ...(this.modelSettings !== undefined && { modelSettings: this.modelSettings }),
+      tools: sdkTools,
+    });
+  }
+
+  isContinuationInvalid(err: unknown): boolean {
+    const msg = err instanceof Error ? err.message : String(err);
+    return STALE_SESSION_RE.test(msg);
+  }
+
+  async close(): Promise<void> {
+    this.sessions.clear();
+    this.todosByContinuation.clear();
+  }
+
+  query(input: QueryInput): AgentQuery {
+    const continuation = input.continuation ?? randomUUID();
+    const session = this.sessionFor(continuation);
+    const abortController = new AbortController();
+    let aborted = false;
+
+    // Side-channel for events that aren't part of the SDK stream (e.g.
+    // push() error). The events generator drains these whenever it yields.
+    const sideEvents: AgentEvent[] = [];
+
+    const agent = this.agent;
+    const maxTurns = this.maxTurns;
+    const todosByContinuation = this.todosByContinuation;
+    const hasTodoTool = this.hasTodoTool;
+    const canonicalByWireName = this.canonicalByWireName;
+    const initialMessage = input.message;
+
+    async function* events(): AsyncGenerator<AgentEvent> {
+      yield { type: 'session_start', continuation };
+
+      // Empty-message resume: just open the continuation, emit lifecycle.
+      if (initialMessage === undefined) {
+        // Drain any sideEvents that arrived before iteration started.
+        while (sideEvents.length > 0) yield sideEvents.shift()!;
+        yield { type: 'session_end', usage: ZERO_USAGE, stopReason: 'stop' };
+        return;
+      }
+
+      let lastUsage: TokenUsage = ZERO_USAGE;
+      let lastStopReason: StopReason = 'stop';
+
+      try {
+        const stream = await run(agent, initialMessage, {
+          stream: true,
+          session,
+          maxTurns,
+          signal: abortController.signal,
+          context: { continuation },
+          ...(hasTodoTool && {
+            callModelInputFilter: (args: { modelData: { input: AgentInputItem[]; instructions?: string } }) => {
+              const todos = todosByContinuation.get(continuation);
+              if (todos === undefined) return args.modelData;
+              const formatted = formatTodos(todos);
+              if (formatted === '') return args.modelData;
+              const combined = combineSystem(args.modelData.instructions, `Current todos:\n${formatted}`);
+              const out: { input: AgentInputItem[]; instructions?: string } = { input: args.modelData.input };
+              if (combined !== undefined) out.instructions = combined;
+              return out;
+            },
+          }),
+        });
+
+        const textBuf = new Map<string, string>();
+        const reasoningBuf = new Map<string, string>();
+
+        for await (const ev of stream) {
+          if (aborted) break;
+          // Drain any pushed side-events before yielding the SDK event.
+          while (sideEvents.length > 0) yield sideEvents.shift()!;
+          yield { type: 'activity' };
+          yield* translateStreamEvent(ev, canonicalByWireName, textBuf, reasoningBuf);
+        }
+        await stream.completed;
+        lastUsage = mapUsage(stream.runContext.usage);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        yield { type: 'error', message: msg, retryable: false };
+        lastStopReason = 'error';
+      }
+
+      // Drain any remaining side-events before terminating.
+      while (sideEvents.length > 0) yield sideEvents.shift()!;
+
+      const finalReason: StopReason = aborted ? 'aborted' : lastStopReason;
+      yield { type: 'session_end', stopReason: finalReason, usage: lastUsage };
+    }
+
+    return {
+      push: (_msg: string) => {
+        // run() is single-turn-shaped on @openai/agents — same as Codex.
+        // Push doesn't make sense; surface a clear error.
+        sideEvents.push({
+          type: 'error',
+          message:
+            'push() not supported on OpenAI Agents backend; end() and run() with continuation instead',
+          retryable: false,
+        });
+      },
+      end: () => {
+        // Single-shot semantics: end() is a no-op once the SDK stream completes.
+      },
+      abort: () => {
+        aborted = true;
+        abortController.abort();
+      },
+      events: events(),
+    };
+  }
+
+  // ── Tool wiring ──
+
+  private buildSdkTools(parentTools: Tool[]): SdkTool[] {
+    const out: SdkTool[] = [];
+    for (const t of parentTools) {
+      if (t.hosted?.openai !== undefined) {
+        const hosted = t.hosted.openai as SdkTool & { name?: string; type?: string };
+        out.push(hosted);
+        const wireName = hosted.name ?? hosted.type ?? t.name;
+        this.canonicalByWireName.set(wireName, t.name);
+        continue;
+      }
+      if (t.name === 'task') {
+        out.push(this.buildTaskTool(t));
+        this.canonicalByWireName.set('task', 'task');
+        continue;
+      }
+      if (t.name === 'todo') {
+        out.push(this.buildTodoTool(t));
+        this.canonicalByWireName.set('todo', 'todo');
+        continue;
+      }
+      if (!t.execute) continue;
+      out.push(wrapPlainTool(t));
+      this.canonicalByWireName.set(t.name, t.name);
+    }
+    return out;
+  }
+
+  private buildTaskTool(taskTool: Tool): SdkTool {
+    const subagentToolsFor = this.subagentToolsFor;
+    const model = this.model;
+    const modelSettings = this.modelSettings;
+    const instructions = this.instructions;
+
+    // Restrict to Claude one-shot form so we can pass a clean ZodObject
+    // (the SDK's tool() helper requires ToolInputParameters = ZodObjectLike).
+    return tool({
+      name: 'task',
+      description: taskTool.description,
+      strict: true,
+      parameters: z.object({
+        description: z.string(),
+        prompt: z.string(),
+        subagent_type: z.string().optional(),
+      }),
+      execute: async (input) => {
+        const i = input as { description: string; prompt: string; subagent_type?: string };
+        const subagentType = i.subagent_type ?? '';
+        const childTools = subagentToolsFor(subagentType).filter((t) => t.name !== 'task');
+        const childSdkTools: SdkTool[] = [];
+        for (const t of childTools) {
+          if (t.hosted?.openai !== undefined) {
+            childSdkTools.push(t.hosted.openai as SdkTool);
+            continue;
+          }
+          if (!t.execute) continue;
+          childSdkTools.push(wrapPlainTool(t));
+        }
+        const child = new Agent({
+          name: 'agent-sdk-subagent',
+          ...(instructions !== undefined && { instructions }),
+          model,
+          ...(modelSettings !== undefined && { modelSettings }),
+          tools: childSdkTools,
+        });
+        const result = await run(child, i.prompt);
+        const text = result.finalOutput;
+        return typeof text === 'string' ? text : JSON.stringify(text);
+      },
+    });
+  }
+
+  private buildTodoTool(todoTool: Tool): SdkTool {
+    const todos = this.todosByContinuation;
+    return tool({
+      name: 'todo',
+      description: todoTool.description,
+      strict: true,
+      parameters: z.object({
+        todos: z.array(
+          z.object({
+            content: z.string(),
+            status: z.enum(['pending', 'in_progress', 'completed']),
+            activeForm: z.string(),
+          }),
+        ),
+      }),
+      execute: async (input, runContext) => {
+        const ctx = runContext?.context as { continuation?: string } | undefined;
+        if (ctx?.continuation !== undefined) {
+          todos.set(ctx.continuation, input);
+        }
+        return 'todos updated';
+      },
+    });
+  }
+
+  // ── Session resolution ──
+
+  private sessionFor(continuation: string): Session {
+    const cached = this.sessions.get(continuation);
+    if (cached !== undefined) return cached;
+
+    let session: Session;
+    if (this.useConversations) {
+      session = new OpenAIConversationsSession({ conversationId: continuation });
+    } else if (this.sessionsDir !== undefined) {
+      const filePath = path.join(this.sessionsDir, `${continuation}.jsonl`);
+      session = new JsonlSession({ sessionId: continuation, filePath });
+    } else {
+      session = new MemorySession({ sessionId: continuation });
+    }
+
+    if (this.autoCompact && !this.useConversations) {
+      // Compaction decorator requires the underlying session to expose the
+      // 'responses' API tag; MemorySession and our JsonlSession both qualify.
+      // The decorator's typing is strict about the API tag on the underlying
+      // session — cast through unknown since our JsonlSession doesn't carry
+      // the brand statically.
+      session = new OpenAIResponsesCompactionSession({
+        underlyingSession: session as unknown as Session & { __openai_session_api?: 'responses' },
+      });
+    }
+
+    this.sessions.set(continuation, session);
+    return session;
+  }
+}
+
+export function openaiAgents(options: OpenAIAgentsBackendOptions): OpenAIAgentsBackend {
+  return new OpenAIAgentsBackend(options);
+}
+
+// ── JsonlSession (our local Session impl) ──
+
+/**
+ * Session implementation backed by a JSONL file. One AgentInputItem per
+ * line, JSON-encoded. AgentInputItem is the SDK's typed discriminated
+ * union — designed for serialization, since it's literally what gets
+ * posted to the model verbatim.
+ *
+ * Format is tied to @openai/agents versions; major SDK bumps may break
+ * the file format. Acceptable trade — same posture as Vercel with UIMessage.
+ */
+export class JsonlSession implements Session {
+  private items: AgentInputItem[] | undefined;
+
+  constructor(private readonly opts: { sessionId: string; filePath: string }) {}
+
+  async getSessionId(): Promise<string> {
+    return this.opts.sessionId;
+  }
+
+  async getItems(limit?: number): Promise<AgentInputItem[]> {
+    if (this.items === undefined) this.items = readJsonlItems(this.opts.filePath);
+    return limit !== undefined ? this.items.slice(-limit) : [...this.items];
+  }
+
+  async addItems(items: AgentInputItem[]): Promise<void> {
+    if (this.items === undefined) this.items = readJsonlItems(this.opts.filePath);
+    this.items.push(...items);
+    appendJsonlItems(this.opts.filePath, items);
+  }
+
+  async popItem(): Promise<AgentInputItem | undefined> {
+    if (this.items === undefined) this.items = readJsonlItems(this.opts.filePath);
+    const popped = this.items.pop();
+    if (popped !== undefined) rewriteJsonl(this.opts.filePath, this.items);
+    return popped;
+  }
+
+  async clearSession(): Promise<void> {
+    this.items = [];
+    fs.rmSync(this.opts.filePath, { force: true });
+  }
+}
+
+export function readJsonlItems(filePath: string): AgentInputItem[] {
+  if (!fs.existsSync(filePath)) return [];
+  const content = fs.readFileSync(filePath, 'utf-8');
+  const out: AgentInputItem[] = [];
+  for (const line of content.split('\n')) {
+    if (line.trim() === '') continue;
+    out.push(JSON.parse(line) as AgentInputItem);
+  }
+  return out;
+}
+
+export function appendJsonlItems(filePath: string, items: AgentInputItem[]): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const lines = items.map((it) => JSON.stringify(it) + '\n').join('');
+  fs.appendFileSync(filePath, lines);
+}
+
+export function rewriteJsonl(filePath: string, items: AgentInputItem[]): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const content = items.map((it) => JSON.stringify(it) + '\n').join('');
+  fs.writeFileSync(filePath, content);
+}
+
+// ── Helpers ──
+
+function wrapPlainTool(t: Tool): SdkTool {
+  const { params, wrapped } = wrapSchemaForOpenAI(t.schema);
+  return tool({
+    name: t.name,
+    description: t.description,
+    strict: true,
+    parameters: params,
+    execute: async (args: unknown) => {
+      const actualArgs = wrapped ? (args as { input: unknown }).input : args;
+      const result = await t.execute!(actualArgs);
+      return typeof result === 'string' ? result : JSON.stringify(result);
+    },
+  });
+}
+
+/**
+ * The SDK's tool() helper requires `ToolInputParameters = ZodObjectLike`.
+ * Object schemas pass through unchanged; non-object schemas (unions,
+ * arrays, primitives) are wrapped as `{input: <schema>}` and unwrapped
+ * before calling the user's execute. Same pattern as Claude's MCP tool
+ * registration.
+ */
+export function wrapSchemaForOpenAI(
+  schema: unknown,
+): { params: z.ZodObject<z.ZodRawShape>; wrapped: boolean } {
+  if (schema instanceof z.ZodObject) {
+    return { params: schema as z.ZodObject<z.ZodRawShape>, wrapped: false };
+  }
+  return { params: z.object({ input: schema as z.ZodTypeAny }), wrapped: true };
+}
+
+/**
+ * Format the `todo` tool input as a checklist for system-prompt injection.
+ * Mirrors Vercel's formatTodos but only handles the Claude shape since
+ * we restrict the todo tool to that shape on this backend (the SDK's
+ * tool() helper requires a ZodObject, not a union).
+ */
+export function formatTodos(input: unknown): string {
+  if (typeof input !== 'object' || input === null) return '';
+  const i = input as { todos?: unknown };
+  if (!Array.isArray(i.todos)) return '';
+  return i.todos
+    .map((t) => {
+      const item = t as { content?: unknown; status?: unknown };
+      const box =
+        item.status === 'completed' ? '[x]' : item.status === 'in_progress' ? '[~]' : '[ ]';
+      const content = typeof item.content === 'string' ? item.content : String(item.content);
+      return `${box} ${content}`;
+    })
+    .join('\n');
+}
+
+export function combineSystem(
+  base: string | undefined,
+  append: string | undefined,
+): string | undefined {
+  if (base === undefined && append === undefined) return undefined;
+  if (base === undefined) return append;
+  if (append === undefined) return base;
+  return `${base}\n\n${append}`;
+}
+
+function mapUsage(usage: Usage): TokenUsage {
+  // OpenAI's input_tokens_details has cached_tokens; output_tokens_details
+  // doesn't expose a cache-write counterpart in the standard shape.
+  const inputDetailsArr = usage.inputTokensDetails ?? [];
+  let cacheRead = 0;
+  for (const d of inputDetailsArr) {
+    if (typeof d?.cached_tokens === 'number') cacheRead += d.cached_tokens;
+  }
+  return {
+    input: usage.inputTokens ?? 0,
+    output: usage.outputTokens ?? 0,
+    cacheRead,
+    cacheWrite: 0,
+  };
+}
+
+// ── Event translation ──
+
+/**
+ * Translate one @openai/agents stream event into zero or more AgentEvents.
+ *
+ * Three event classes from the SDK:
+ *  - RunRawModelStreamEvent    → text/reasoning/tool-input deltas
+ *  - RunItemStreamEvent        → finalized message/tool/handoff items
+ *  - RunAgentUpdatedStreamEvent → no user-visible event (already covered by `activity`)
+ */
+export function* translateStreamEvent(
+  ev: RunRawModelStreamEvent | RunItemStreamEvent | RunAgentUpdatedStreamEvent,
+  canonicalByWireName: Map<string, string>,
+  textBuf: Map<string, string>,
+  reasoningBuf: Map<string, string>,
+): Generator<AgentEvent> {
+  if (ev.type === 'raw_model_stream_event') {
+    yield* translateRawEvent(ev.data, textBuf, reasoningBuf);
+    return;
+  }
+  if (ev.type === 'run_item_stream_event') {
+    yield* translateItemEvent(ev, canonicalByWireName, textBuf, reasoningBuf);
+    return;
+  }
+  // 'agent_updated_stream_event' — no-op (covered by 'activity').
+}
+
+function* translateRawEvent(
+  data: unknown,
+  textBuf: Map<string, string>,
+  reasoningBuf: Map<string, string>,
+): Generator<AgentEvent> {
+  const e = data as { type?: string; item_id?: string; delta?: string; text?: string };
+  if (typeof e?.type !== 'string') return;
+  switch (e.type) {
+    case 'response.output_text.delta': {
+      if (typeof e.item_id !== 'string' || typeof e.delta !== 'string') return;
+      const seen = textBuf.has(e.item_id);
+      if (!seen) {
+        textBuf.set(e.item_id, '');
+        yield { type: 'text_start' };
+      }
+      textBuf.set(e.item_id, (textBuf.get(e.item_id) ?? '') + e.delta);
+      yield { type: 'text_delta', delta: e.delta };
+      return;
+    }
+    case 'response.reasoning_summary_text.delta':
+    case 'response.reasoning.delta': {
+      if (typeof e.item_id !== 'string' || typeof e.delta !== 'string') return;
+      const seen = reasoningBuf.has(e.item_id);
+      if (!seen) {
+        reasoningBuf.set(e.item_id, '');
+        yield { type: 'thinking_start' };
+      }
+      reasoningBuf.set(e.item_id, (reasoningBuf.get(e.item_id) ?? '') + e.delta);
+      yield { type: 'thinking_delta', delta: e.delta };
+      return;
+    }
+    case 'response.function_call_arguments.delta': {
+      const ev = data as { item_id?: string; delta?: string };
+      if (typeof ev.item_id !== 'string' || typeof ev.delta !== 'string') return;
+      yield { type: 'tool_call_input_delta', id: ev.item_id, deltaJson: ev.delta };
+      return;
+    }
+    // Other raw events are aggregated into RunItemStreamEvents — wait for those.
+  }
+}
+
+function* translateItemEvent(
+  ev: RunItemStreamEvent,
+  canonicalByWireName: Map<string, string>,
+  textBuf: Map<string, string>,
+  reasoningBuf: Map<string, string>,
+): Generator<AgentEvent> {
+  switch (ev.name) {
+    case 'message_output_created': {
+      // Synthesize text_end from the accumulated buffer for any matching id;
+      // also fall back to extracting text from rawItem if no buffer was built
+      // (e.g. non-streamed path / a model that didn't emit deltas).
+      const item = ev.item as { rawItem?: { id?: string; content?: unknown } };
+      const id = item.rawItem?.id;
+      let text = '';
+      if (typeof id === 'string' && textBuf.has(id)) {
+        text = textBuf.get(id) ?? '';
+        textBuf.delete(id);
+      } else {
+        text = extractAssistantText(item.rawItem);
+      }
+      yield { type: 'text_end', text };
+      return;
+    }
+    case 'reasoning_item_created': {
+      const item = ev.item as { rawItem?: { id?: string; content?: unknown; summary?: unknown } };
+      const id = item.rawItem?.id;
+      let text = '';
+      if (typeof id === 'string' && reasoningBuf.has(id)) {
+        text = reasoningBuf.get(id) ?? '';
+        reasoningBuf.delete(id);
+      } else {
+        text = extractReasoningText(item.rawItem);
+      }
+      yield { type: 'thinking_end', text };
+      return;
+    }
+    case 'tool_called':
+    case 'tool_search_called': {
+      const item = ev.item as {
+        rawItem?: {
+          callId?: string;
+          id?: string;
+          name?: string;
+          arguments?: string | unknown;
+          type?: string;
+        };
+      };
+      const raw = item.rawItem ?? {};
+      const wireName = raw.name ?? (raw.type === 'tool_search_call' ? 'tool_search' : 'unknown');
+      const canonical = canonicalByWireName.get(wireName) ?? wireName;
+      const id = raw.callId ?? raw.id ?? randomUUID();
+      const inputArgs =
+        typeof raw.arguments === 'string' ? safeParseJson(raw.arguments) : (raw.arguments ?? {});
+      yield {
+        type: 'tool_call_end',
+        toolCall: { id, name: canonical, input: inputArgs },
+      };
+      return;
+    }
+    case 'tool_output':
+    case 'tool_search_output_created': {
+      const item = ev.item as {
+        rawItem?: { callId?: string; id?: string; output?: unknown; error?: unknown };
+        output?: unknown;
+      };
+      const raw = item.rawItem ?? {};
+      const id = raw.callId ?? raw.id ?? randomUUID();
+      const output = raw.output ?? item.output ?? '';
+      yield {
+        type: 'tool_result',
+        result: { toolCallId: id, output, isError: raw.error !== undefined },
+      };
+      return;
+    }
+    case 'handoff_requested':
+    case 'handoff_occurred': {
+      const item = ev.item as { rawItem?: { name?: string } };
+      const target = item.rawItem?.name ?? 'unknown';
+      yield { type: 'text_end', text: `(handoff ${ev.name === 'handoff_requested' ? 'requested' : 'occurred'}: ${target})` };
+      return;
+    }
+    case 'tool_approval_requested': {
+      yield {
+        type: 'error',
+        message: 'tool approval requested but not supported by this backend',
+        retryable: false,
+      };
+      return;
+    }
+  }
+}
+
+function extractAssistantText(rawItem: unknown): string {
+  if (typeof rawItem !== 'object' || rawItem === null) return '';
+  const content = (rawItem as { content?: unknown }).content;
+  if (!Array.isArray(content)) return '';
+  const parts: string[] = [];
+  for (const c of content) {
+    if (typeof c !== 'object' || c === null) continue;
+    const part = c as { type?: string; text?: string };
+    if (part.type === 'output_text' && typeof part.text === 'string') parts.push(part.text);
+  }
+  return parts.join('');
+}
+
+function extractReasoningText(rawItem: unknown): string {
+  if (typeof rawItem !== 'object' || rawItem === null) return '';
+  const item = rawItem as { content?: unknown; summary?: unknown };
+  const out: string[] = [];
+  if (Array.isArray(item.summary)) {
+    for (const s of item.summary) {
+      if (typeof s === 'string') out.push(s);
+      else if (typeof s === 'object' && s !== null && 'text' in s && typeof (s as { text: unknown }).text === 'string') {
+        out.push((s as { text: string }).text);
+      }
+    }
+  }
+  if (Array.isArray(item.content)) {
+    for (const c of item.content) {
+      if (typeof c === 'string') out.push(c);
+      else if (typeof c === 'object' && c !== null && 'text' in c && typeof (c as { text: unknown }).text === 'string') {
+        out.push((c as { text: string }).text);
+      }
+    }
+  }
+  return out.join('\n');
+}
+
+function safeParseJson(s: string): unknown {
+  try {
+    return JSON.parse(s);
+  } catch {
+    return s;
+  }
+}
+
+/**
+ * Walk a loaded AgentInputItem[] backwards looking for the most recent
+ * function_call to the `todo` tool. Used on cache-miss reload so the
+ * callModelInputFilter injection survives process restarts without a
+ * separate sidecar file — the JSONL is the single source of truth.
+ */
+export function findLatestTodoInput(items: AgentInputItem[]): unknown {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const item = items[i] as { type?: string; name?: string; arguments?: unknown } | undefined;
+    if (item?.type !== 'function_call' || item.name !== 'todo') continue;
+    const args = item.arguments;
+    if (typeof args === 'string') {
+      try {
+        return JSON.parse(args);
+      } catch {
+        return undefined;
+      }
+    }
+    return args;
+  }
+  return undefined;
+}

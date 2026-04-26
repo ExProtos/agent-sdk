@@ -23,6 +23,18 @@ export interface Tool<TInput = unknown, TOutput = unknown> {
     claude?: string;
     codex?: string;
   };
+  /**
+   * Backend-hosted tool descriptors. The OpenAI Agents backend recognizes
+   * `hosted.openai` and forwards the stashed SDK tool object directly into
+   * the underlying Agent. Other backends ignore `hosted.*` entirely.
+   *
+   * The value is opaque (`unknown`) to avoid leaking @openai/agents types
+   * into the public Tool interface — `hostedTools.*` factories in the
+   * openai-agents backend produce the right shape.
+   */
+  hosted?: {
+    openai?: unknown;
+  };
   /** In-process implementation. Required unless every backend has a native mapping. */
   execute?(input: TInput): Promise<TOutput>;
 }
