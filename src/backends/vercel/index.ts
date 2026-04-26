@@ -28,6 +28,7 @@ import * as path from 'node:path';
 import {
   convertToModelMessages,
   readUIMessageStream,
+  stepCountIs,
   streamText,
   tool as vercelTool,
   type FinishReason,
@@ -92,6 +93,12 @@ export interface VercelBackendOptions {
 
 const ZERO_USAGE: TokenUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 
+// AI SDK's streamText defaults to stepCountIs(1) — i.e. stop after one step,
+// which means a turn that calls a tool ends after the tool result instead of
+// continuing to a final answer. We default to stepCountIs(20) so the agent
+// loop actually runs to completion. Callers can override via VercelBackendOptions.
+const DEFAULT_STOP_WHEN: StopCondition<ToolSet> = stepCountIs(20);
+
 export class VercelBackend implements Backend {
   readonly name = 'vercel';
 
@@ -109,8 +116,10 @@ export class VercelBackend implements Backend {
   // Per-continuation `todo` tool state. The most recent tool input (either
   // the structured Claude shape or freeform Codex shape) is stored as-is
   // and re-injected into the system prompt before each step via prepareStep.
-  // Lifetime is the backend instance — todos do NOT survive process restart
-  // (unlike conversation history, which round-trips via JSONL).
+  // In-memory while the backend instance lives; on cache-miss reload, todos
+  // are reconstructed by walking the loaded UIMessage[] for the most recent
+  // tool-todo part (see findLatestTodoInput) — the JSONL is the single
+  // source of truth, no sidecar file.
   private readonly todosByContinuation = new Map<string, unknown>();
 
   constructor(options: VercelBackendOptions) {
@@ -266,8 +275,8 @@ export class VercelBackend implements Backend {
             tools,
             messages: history,
             abortSignal: abortController.signal,
+            stopWhen: callOptions.stopWhen ?? DEFAULT_STOP_WHEN,
             ...(baseSystem !== undefined && { system: baseSystem }),
-            ...(callOptions.stopWhen !== undefined && { stopWhen: callOptions.stopWhen }),
             ...(callOptions.maxOutputTokens !== undefined && {
               maxOutputTokens: callOptions.maxOutputTokens,
             }),
@@ -438,8 +447,8 @@ export async function runSubAgent(
     model,
     tools,
     messages: [{ role: 'user', content: claudeForm.prompt }],
+    stopWhen: callOptions.stopWhen ?? DEFAULT_STOP_WHEN,
     ...(callOptions.instructions !== undefined && { system: callOptions.instructions }),
-    ...(callOptions.stopWhen !== undefined && { stopWhen: callOptions.stopWhen }),
     ...(callOptions.maxOutputTokens !== undefined && {
       maxOutputTokens: callOptions.maxOutputTokens,
     }),

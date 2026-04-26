@@ -4,14 +4,15 @@
  * Tool resolution:
  *   - Tools with `native.claude` set → registered via `allowedTools`. The SDK
  *     uses its built-in implementation; our `execute` is not called.
- *   - Tools with `execute` and no `native.claude` and a `z.object()` schema →
- *     bundled into an in-process SDK MCP server (`createSdkMcpServer`). The
- *     closure runs in the parent process; the wire name on Claude's side is
- *     `mcp__agent-sdk-tools__<name>` and we map it back to the canonical
- *     name in event translation.
- *   - Tools that lack both `native.claude` and a usable `execute` are
- *     silently skipped. Tools with non-object schemas (unions, arrays) can't
- *     ride the SDK MCP server today — log to stderr and skip.
+ *   - Tools with `execute` and no `native.claude` → bundled into an in-process
+ *     SDK MCP server (`createSdkMcpServer`). The closure runs in the parent
+ *     process; the wire name on Claude's side is `mcp__agent-sdk-tools__<name>`
+ *     and we map it back to the canonical name in event translation.
+ *     Object-schema tools register their `.shape` directly; non-object schemas
+ *     (unions, arrays) are wrapped as `{input: <schema>}` — the handler and
+ *     event translator unwrap so consumers never see the wrapper level.
+ *   - Tools that lack both `native.claude` and an `execute` are silently
+ *     skipped — nothing to register.
  *
  * Event translation: complete content blocks (text/thinking/tool_use)
  * surface as text_end / thinking_end / tool_call_end events; no streaming

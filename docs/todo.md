@@ -75,3 +75,19 @@ Algorithm, run between turns (never mid-turn):
 - Per-message-role placement of the summary — system message (cleanest, but some providers don't support mid-conversation system messages) vs. synthetic user message ("Earlier in this conversation: …"). Synthetic user is safer cross-provider.
 
 **Non-goals.** No tail-of-conversation compaction (we keep the last N turns verbatim — no summarizing the active context). No cross-provider summary normalization (each provider sees a free-form text summary).
+
+## Faster grep implementation
+
+The default `grep` impl (`src/tools/implementations.ts`) globs every candidate file then reads each one fully into a Buffer to check for matches. Fine for small trees but slow + memory-heavy for repos with thousands of files or any large file in the search set.
+
+**Why.** Read-everything-then-match is `O(total bytes)`, single-threaded, and allocates the full file as a Buffer before scanning. A streaming line reader would short-circuit on the first match per file and keep memory bounded. Even better: shell out to `rg` (ripgrep) when it's on PATH — it's typically 10-100x faster, handles `.gitignore` correctly, has its own binary-detection heuristic, and parallelizes file reads.
+
+**Shape.** Two layers:
+
+1. Detect `rg` on PATH at module load. If present, the grep impl shells out to it: `rg --no-heading --line-number --color=never <pattern> [--glob <filter>] <root>`. Parse the output line by line into `file:line:text`. ~30 LOC.
+2. If not present, fall back to the current implementation but switch to a streaming line reader (`readline.createInterface({ input: fs.createReadStream(file) })`) instead of `fs.readFile` + `split('\n')`. Drops worst-case memory from `O(file size)` to `O(line size)`. ~30 LOC.
+
+**Caveats.**
+- `rg` arg semantics differ slightly from our schema (e.g., glob filter vs. file-type flag). Need to translate.
+- Binary detection: ripgrep's heuristic is more sophisticated than our 4KB NUL-byte check. Different files may be skipped on the rg path — acceptable since rg's behavior is what users expect when they have it installed.
+- `.gitignore` semantics: rg honors it by default; our impl doesn't. Document the divergence or pass `--no-ignore` for parity.

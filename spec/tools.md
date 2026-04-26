@@ -10,7 +10,7 @@ The catalog name is the **canonical** name. It's the value the consumer's `switc
 - `description` is what the model sees on backends that take user-supplied descriptions (the bridge path; future Vercel backend). On Claude and Codex's natives the description is informational — the SDK's internal description wins.
 - `native.claude` is the wire name passed to Claude's `allowedTools` — must match Claude's exact tool name.
 - `native.codex` is the wire name on the corresponding Codex item type — must match Codex's emitted `item.type` so the Codex backend's translator skips bridge wiring (see backends/codex.md → Bridge eligibility).
-- `execute` is provided only when the in-process path is reachable. Today only `webFetch` has one (placeholder for the planned Vercel backend; never invoked under Claude or Codex).
+- `execute` is provided when an in-process implementation is reachable. The local-system tools (`bash`, `read`, `write`, `edit`, `glob`, `grep`, `webFetch`) all ship with one in `src/tools/implementations.ts`. `webSearch` ships without one (caller plugs a provider via `withImpls`). `task` and `todo` are special-cased by the Vercel backend (their `execute` is bound to backend-internal state — model + parent toolset for `task`, per-continuation map + prepareStep for `todo` — and the canonical Tool definition stays execute-less). The in-process implementations fire on Vercel directly and on Codex via the MCP bridge for any tool without `native.codex`. They're never invoked when a backend's native takes precedence.
 
 ## `bash`
 

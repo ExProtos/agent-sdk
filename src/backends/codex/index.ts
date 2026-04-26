@@ -198,6 +198,7 @@ export class CodexBackend implements Backend {
               ? err.message
               : String(err);
         queue.push({ type: 'error', message, retryable: false });
+        queue.push({ type: 'session_end', stopReason: 'error', usage: zeroUsage() });
         queue.end();
       } finally {
         // Detach notification handler whenever the queue eventually ends
@@ -213,7 +214,7 @@ export class CodexBackend implements Backend {
         for await (const ev of queue.iter()) {
           if (aborted) return;
           yield ev;
-          if (ev.type === 'session_end' || ev.type === 'error') return;
+          if (ev.type === 'session_end') return;
         }
       } finally {
         queue.end();
@@ -321,8 +322,13 @@ export function translateNotification(
     }
 
     case 'error': {
+      // Standalone server error (not tied to turn/completed). Push the error
+      // and a terminal session_end so consumers always see the spec-promised
+      // pair (error then session_end) and the generator doesn't hang waiting.
       const p = notif.params as { message: string };
       queue.push({ type: 'error', message: p.message, retryable: false });
+      queue.push({ type: 'session_end', stopReason: 'error', usage: zeroUsage() });
+      queue.end();
       return;
     }
   }
