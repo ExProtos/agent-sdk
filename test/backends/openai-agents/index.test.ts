@@ -538,9 +538,14 @@ describe('tool resolution', () => {
   it('builds a hosted tool from hostedTools.webSearch()', () => {
     const t = hostedTools.webSearch();
     expect(t.name).toBe('webSearch');
-    expect(t.hosted?.openai).toBeDefined();
+    // Stashed as the SDK tool object under native.openai
+    expect(typeof t.native?.openai).toBe('object');
     // Construction succeeds with a hosted tool
     expect(() => openaiAgents({ model: 'gpt-5', tools: [t] })).not.toThrow();
+  });
+
+  it('accepts builtin.webSearch via the string marker (lazy-constructs the SDK hosted tool)', () => {
+    expect(() => openaiAgents({ model: 'gpt-5', tools: [builtin.webSearch] })).not.toThrow();
   });
 
   it('skips tools that have no execute and no native/hosted mapping', () => {

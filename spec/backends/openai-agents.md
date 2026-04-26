@@ -17,11 +17,9 @@ export interface OpenAIAgentsBackendOptions {
   /** Required. OpenAI model name. */
   model: string;
   /**
-   * Tools to expose. Three treatment paths at construction time:
-   *   - `hosted.openai` set → forwarded to Agent.tools as the SDK hosted tool
-   *   - `t.name === 'task'` → uses Agent.asTool() for one-shot delegation
-   *   - has `execute` → wrapped via SDK's `tool({name, parameters, execute})`
-   *   - none of the above → silently skipped
+   * Tools to expose. Resolved per `Tool.native.openai` / `Tool.execute`
+   * with special-cases for `task` and `todo`. Tools without any usable
+   * path are silently skipped.
    */
   tools?: Tool[];
   /** System prompt. Mapped to Agent.instructions. */
@@ -72,21 +70,23 @@ export const hostedTools: {
 
 ## Tool resolution
 
-The backend has three tool registration paths plus a special-case for `task`. At construction time:
+Dispatch order at construction time, per parent tool:
 
 | Condition | Treatment |
 |---|---|
-| `t.hosted?.openai` set | Forward the stashed SDK hosted-tool object directly into `Agent.tools`. `execute` is not called — the tool runs server-side in OpenAI's infra. |
-| `t.name === 'task'` | Special-cased function tool: receives the canonical union schema (Claude one-shot or Codex multi-step) flattened by `wrapSchemaForOpenAI`. On execute, unwraps the chosen branch, rejects the Codex form with a clear error, builds a child `Agent` (same model + instructions, tools from `subagentTools(subagent_type)` minus `task` itself), and runs it via nested `run()`. Returns `result.finalOutput`. |
-| `t.name === 'todo'` | Special-cased function tool: receives the canonical union schema (Claude `{todos: [...]}` or Codex `{text: …}`). On execute, unwraps the chosen branch and writes to a per-continuation `Map<string, unknown>`. `callModelInputFilter` re-injects the latest todos into `instructions` before each model call. |
+| `t.native.openai` is an **object** | A user-customized SDK tool from `hostedTools.*` (e.g. `webSearchTool({userLocation})`, `fileSearchTool(['vs_id'])`, `computerTool({computer})`). Forwarded verbatim into `Agent.tools`. `execute` is not called. |
+| `t.native.openai === 'task'` | Special-cased function tool: receives the canonical union schema (Claude one-shot or Codex multi-step) flattened by `wrapSchemaForOpenAI`. On execute, unwraps the chosen branch, rejects the Codex form with a clear error, builds a child `Agent` (same model + instructions, tools from `subagentTools(subagent_type)` minus `task` itself), and runs it via nested `run()`. Returns `result.finalOutput`. |
+| `t.native.openai === 'todo'` | Special-cased function tool: receives the canonical union schema (Claude `{todos: [...]}` or Codex `{text: …}`). On execute, unwraps the chosen branch and writes to a per-continuation `Map<string, unknown>`. `callModelInputFilter` re-injects the latest todos into `instructions` before each model call. |
+| `t.native.openai` is one of `'web_search'` / `'code_interpreter'` / `'image_generation'` | Lazy-construct the corresponding SDK hosted tool with default options (`webSearchTool()`, `codeInterpreterTool()`, `imageGenerationTool()`) and forward into `Agent.tools`. This is how the canonical `tools.webSearch` fires by default. |
 | Has `execute`, none of the above | Wrapped via the SDK's `tool({name, description, parameters, execute})`. Closure runs in-process. Schema gets shape-promoted (see [Schema shape promotion](#schema-shape-promotion)). |
+| Otherwise | Silently skipped (matches Vercel's posture). |
 | Otherwise | Silently skipped (matches Vercel). |
 
 `native.claude` / `native.codex` are ignored entirely. Same posture as Vercel.
 
 ### Hosted tool factories
 
-`src/backends/openai-agents/hosted.ts` wraps the SDK's hosted-tool factories (`webSearchTool`, `fileSearchTool`, `codeInterpreterTool`, `computerTool`, `imageGenerationTool` — all from `@openai/agents-openai`, transitively available through `@openai/agents`) into our `Tool` shape:
+`src/backends/openai-agents/hosted.ts` wraps the SDK's hosted-tool factories (`webSearchTool`, `fileSearchTool`, `codeInterpreterTool`, `computerTool`, `imageGenerationTool` — all from `@openai/agents-openai`, transitively available through `@openai/agents`) into our `Tool` shape. Use these when you need to customize options (web search location, vector store IDs, computer dimensions). For default-configured hosted tools, the canonical builtins (`tools.webSearch`) already declare a string `native.openai` marker and the backend lazy-constructs the SDK tool — no factory call needed.
 
 ```typescript
 export const hostedTools = {
@@ -94,7 +94,7 @@ export const hostedTools = {
     name: 'webSearch',
     description: 'OpenAI hosted web search.',
     schema: z.object({}),
-    hosted: { openai: webSearchTool(options) },
+    native: { openai: webSearchTool(options) },
   }),
   // … same shape for fileSearch, codeInterpreter, computerUse, imageGeneration
 };
@@ -118,17 +118,22 @@ The reverse path (reading function-call args back from the JSONL store on cache-
 
 ### Tool type extension
 
+The OpenAI Agents backend uses `Tool.native.openai` polymorphically — string for canonical markers, object for SDK tool instances:
+
 ```typescript
 // src/tools/types.ts
 export interface Tool<TInput = unknown, TOutput = unknown> {
   // existing fields…
-  hosted?: {
-    openai?: unknown;  // an @openai/agents Tool instance, opaque to other backends
+  native?: {
+    claude?: string;
+    codex?: string;
+    vercel?: string;
+    openai?: string | object;  // string marker, or SDK tool object
   };
 }
 ```
 
-Other backends ignore `hosted.openai`. A user who puts `hostedTools.codeInterpreter()` in `tools` and points at Claude or Codex: backend sees no `execute`, no `native.{claude,codex}` — silently skipped. Same fall-through as `native.codex='apply_patch'` for `edit` from Codex's perspective on the Claude backend.
+Other backends ignore `native.openai`. A user who puts `hostedTools.codeInterpreter()` in `tools` and points at Claude or Codex: backend sees no `execute`, no `native.{claude,codex}` — silently skipped. Same fall-through as `native.codex='apply_patch'` for `edit` from Codex's perspective on the Claude backend.
 
 ## Construction
 
@@ -155,30 +160,37 @@ constructor(options: OpenAIAgentsBackendOptions) {
 
   const sdkTools: SdkTool[] = [];
   for (const t of parentTools) {
-    if (t.hosted?.openai !== undefined) {
-      sdkTools.push(t.hosted.openai as SdkTool);
-      this.canonicalByWireName.set((t.hosted.openai as { name: string }).name, t.name);
+    const n = t.native?.openai;
+    if (typeof n === 'object' && n !== null) {
+      // User-customized SDK hosted tool from hostedTools.* — forward verbatim
+      sdkTools.push(n as SdkTool);
+      const wireName = (n as { name?: string; type?: string }).name
+        ?? (n as { type?: string }).type ?? t.name;
+      this.canonicalByWireName.set(wireName, t.name);
       continue;
     }
-    if (t.name === 'task') {
-      const subagentToolsFor = options.subagentTools
-        ?? ((_: string) => parentTools.filter((p) => p.name !== 'task'));
-      sdkTools.push(buildTaskAsTool(this.model, subagentToolsFor, this.instructions));
-      this.canonicalByWireName.set('task', 'task');
+    if (n === 'task') {
+      sdkTools.push(this.buildTaskTool(t));
+      this.canonicalByWireName.set(t.name, t.name);
       continue;
     }
-    if (t.name === 'todo') {
-      sdkTools.push(buildTodoTool(t, this.todosByContinuation));
-      this.canonicalByWireName.set('todo', 'todo');
+    if (n === 'todo') {
+      sdkTools.push(this.buildTodoTool(t));
+      this.canonicalByWireName.set(t.name, t.name);
       continue;
+    }
+    if (typeof n === 'string') {
+      // Default-configured hosted markers: 'web_search', 'code_interpreter',
+      // 'image_generation'. Lazy-construct the SDK hosted tool here.
+      const built = buildHostedFromMarker(n);
+      if (built !== undefined) {
+        sdkTools.push(built.sdkTool);
+        this.canonicalByWireName.set(built.wireName, t.name);
+        continue;
+      }
     }
     if (!t.execute) continue;
-    sdkTools.push(tool({
-      name: t.name,
-      description: t.description,
-      parameters: t.schema,
-      execute: async (args: unknown) => t.execute!(args),
-    }));
+    sdkTools.push(wrapPlainTool(t));
     this.canonicalByWireName.set(t.name, t.name);
   }
 

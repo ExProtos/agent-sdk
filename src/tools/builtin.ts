@@ -9,7 +9,6 @@
  */
 
 import { z } from 'zod';
-import { webSearchTool } from '@openai/agents';
 import type { Tool } from './types';
 import * as impl from './implementations';
 
@@ -176,9 +175,7 @@ export const webSearch: Tool = {
   native: {
     claude: 'WebSearch',
     codex: 'webSearch',
-  },
-  hosted: {
-    openai: webSearchTool(),
+    openai: 'web_search',
   },
 };
 

@@ -8,7 +8,9 @@
  *
  * v0 scope:
  * - One Agent per backend instance, built at construction time
- * - Hosted tools dispatched server-side via `Tool.hosted.openai`
+ * - Hosted tools (web search, code interpreter, etc.) dispatched server-side
+ *   via `Tool.native.openai` (string marker for default config, SDK tool
+ *   object for customized config from hostedTools.* factories)
  * - Function tools wrapped via SDK's `tool({...})` helper; closures run in-process
  * - Special-cases for `task` (closure-bound child Agent) and `todo`
  *   (callModelInputFilter re-injects todos into instructions per step)
@@ -32,8 +34,11 @@ import {
   RunItemStreamEvent,
   RunRawModelStreamEvent,
   Usage,
+  codeInterpreterTool,
+  imageGenerationTool,
   run,
   tool,
+  webSearchTool,
   type AgentInputItem,
   type ModelSettings,
   type Session,
@@ -56,7 +61,7 @@ export interface OpenAIAgentsBackendOptions {
   /** Required. OpenAI model name (e.g. 'gpt-5', 'gpt-4.1'). */
   model: string;
   /**
-   * Tools to expose. Resolved per `Tool.hosted.openai` / `Tool.execute` /
+   * Tools to expose. Resolved per `Tool.native.openai` / `Tool.execute` /
    * special-cases for `task` and `todo`. Tools without a path are silently
    * skipped — same posture as Vercel.
    */
@@ -268,22 +273,33 @@ export class OpenAIAgentsBackend implements Backend {
   private buildSdkTools(parentTools: Tool[]): SdkTool[] {
     const out: SdkTool[] = [];
     for (const t of parentTools) {
-      if (t.hosted?.openai !== undefined) {
-        const hosted = t.hosted.openai as SdkTool & { name?: string; type?: string };
-        out.push(hosted);
-        const wireName = hosted.name ?? hosted.type ?? t.name;
+      const n = t.native?.openai;
+      if (typeof n === 'object' && n !== null) {
+        // User pre-built SDK tool (from hostedTools.* or hand-written) —
+        // forward verbatim.
+        const sdkTool = n as SdkTool & { name?: string; type?: string };
+        out.push(sdkTool);
+        const wireName = sdkTool.name ?? sdkTool.type ?? t.name;
         this.canonicalByWireName.set(wireName, t.name);
         continue;
       }
-      if (t.native?.openai === 'task') {
+      if (n === 'task') {
         out.push(this.buildTaskTool(t));
         this.canonicalByWireName.set(t.name, t.name);
         continue;
       }
-      if (t.native?.openai === 'todo') {
+      if (n === 'todo') {
         out.push(this.buildTodoTool(t));
         this.canonicalByWireName.set(t.name, t.name);
         continue;
+      }
+      if (typeof n === 'string') {
+        const built = buildHostedFromMarker(n);
+        if (built !== undefined) {
+          out.push(built.sdkTool);
+          this.canonicalByWireName.set(built.wireName, t.name);
+          continue;
+        }
       }
       if (!t.execute) continue;
       out.push(wrapPlainTool(t));
@@ -325,13 +341,23 @@ export class OpenAIAgentsBackend implements Backend {
           (t) => t.native?.openai !== 'task',
         );
         const childSdkTools: SdkTool[] = [];
-        for (const t of childTools) {
-          if (t.hosted?.openai !== undefined) {
-            childSdkTools.push(t.hosted.openai as SdkTool);
+        for (const ct of childTools) {
+          const nm = ct.native?.openai;
+          if (typeof nm === 'object' && nm !== null) {
+            childSdkTools.push(nm as SdkTool);
             continue;
           }
-          if (!t.execute) continue;
-          childSdkTools.push(wrapPlainTool(t));
+          if (typeof nm === 'string') {
+            const built = buildHostedFromMarker(nm);
+            if (built !== undefined) {
+              childSdkTools.push(built.sdkTool);
+              continue;
+            }
+            // Sub-agents skip 'task' (already filtered) and 'todo' (no
+            // useful behavior in a one-shot child run).
+          }
+          if (!ct.execute) continue;
+          childSdkTools.push(wrapPlainTool(ct));
         }
         const child = new Agent({
           name: 'agent-sdk-subagent',
@@ -474,6 +500,35 @@ export function rewriteJsonl(filePath: string, items: AgentInputItem[]): void {
 }
 
 // ── Helpers ──
+
+/**
+ * Resolve a string `native.openai` marker that maps to one of OpenAI's
+ * default-configured hosted tools. Contextual markers (`task`, `todo`)
+ * are NOT handled here — they need the backend instance and are
+ * dispatched separately in buildSdkTools.
+ *
+ * Returns undefined for unknown markers (or 'task'/'todo'); caller falls
+ * through to the function-tool path or skips.
+ */
+export function buildHostedFromMarker(
+  marker: string,
+): { sdkTool: SdkTool; wireName: string } | undefined {
+  let sdkTool: (SdkTool & { name?: string; type?: string }) | undefined;
+  switch (marker) {
+    case 'web_search':
+      sdkTool = webSearchTool() as SdkTool & { name?: string; type?: string };
+      break;
+    case 'code_interpreter':
+      sdkTool = codeInterpreterTool() as SdkTool & { name?: string; type?: string };
+      break;
+    case 'image_generation':
+      sdkTool = imageGenerationTool() as SdkTool & { name?: string; type?: string };
+      break;
+    default:
+      return undefined;
+  }
+  return { sdkTool, wireName: sdkTool.name ?? sdkTool.type ?? marker };
+}
 
 function wrapPlainTool(t: Tool): SdkTool {
   const { params, unwrap } = wrapSchemaForOpenAI(t.schema as z.ZodTypeAny);
