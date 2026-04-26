@@ -102,12 +102,16 @@ describe('CodexClient', () => {
   });
 
   it('dispatches notifications to handlers', async () => {
+    // Trigger the notification via a request the test sends AFTER attaching
+    // the handler — otherwise it races with start() resolving and may arrive
+    // before any handler is registered.
     const opts = fakeServerOptions(`
       function onMessage(msg) {
         if (msg.method === 'initialize') {
           send({ id: msg.id, result: {} });
-          // Send a notification right after init
+        } else if (msg.method === 'trigger') {
           send({ method: 'thread/started', params: { thread: { id: 'test-thread' } } });
+          send({ id: msg.id, result: {} });
         }
       }
     `);
@@ -116,9 +120,7 @@ describe('CodexClient', () => {
     const received: unknown[] = [];
 
     const detach = client.onNotification((n) => received.push(n));
-
-    // Wait for the notification to arrive.
-    await new Promise((r) => setTimeout(r, 100));
+    await client.request('trigger', {});
 
     expect(received).toHaveLength(1);
     expect(received[0]).toMatchObject({
