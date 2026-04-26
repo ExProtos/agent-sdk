@@ -176,11 +176,13 @@ The `webSearch` case is a single Codex item that can mean any of three different
 
 `fileChange` skipping `inProgress`: emitting a `tool_result` while the patch is still mid-application would orphan the tool_call once the final state arrives. Wait until the patch settles.
 
-### Duplicate `tool_call_end` is possible by design
+### Duplicate `tool_call_end` is possible
 
-`translateItem` runs once per `item/completed` notification. For long-lived items (`fileChange`, `collabAgentToolCall`) Codex can emit `item/completed` multiple times for the same item id as the underlying state evolves — so consumers may see two `tool_call_end` events with the same `toolCall.id` and one `tool_result` (the final settle). This is intentional: the wrapper passes through what Codex emits rather than tracking item lifecycle.
+`translateItem` runs once per `item/completed` notification and emits one `tool_call_end` each time. **We don't dedupe by `toolCall.id`** — by choice, since tracking item lifecycle is a bigger change with its own tradeoffs.
 
-**Consumer rule:** if you're persisting a tool-call log, dedupe by `toolCall.id` and treat the latest `tool_call_end` for an id as authoritative. The matching `tool_result` (if any) always carries the final state. If you don't dedupe, you'll see two entries per long-lived call — annoying but not load-bearing for correctness.
+Whether duplicates actually appear depends on Codex: if Codex ever emits `item/completed` more than once for the same item id (the protocol's typed `status` field includes `inProgress` on `fileChange` and `collabAgentToolCall`, which hints it might, though we haven't observed it on the wire), consumers will see two `tool_call_end` events with the same id and one `tool_result` (the final settle).
+
+**Consumer rule:** if you're persisting a tool-call log, dedupe by `toolCall.id` and treat the latest `tool_call_end` for an id as authoritative. The matching `tool_result` (if any) always carries the final state.
 
 ## MCP bridge
 
