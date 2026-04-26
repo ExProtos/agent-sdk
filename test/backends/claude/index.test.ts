@@ -6,6 +6,7 @@ import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import {
   ClaudeBackend,
   MessageStream,
+  buildClaudeSdkEnv,
   buildInitialContentParts,
   claude,
   translateMessage,
@@ -423,6 +424,45 @@ describe('ClaudeBackend', () => {
     expect(() => claude({ oauthToken: 'oat', apiKey: 'sk' })).toThrow(
       /mutually exclusive/,
     );
+  });
+});
+
+describe('buildClaudeSdkEnv', () => {
+  it('returns undefined when neither field is set', () => {
+    expect(buildClaudeSdkEnv({}, { PATH: '/usr/bin' })).toBeUndefined();
+  });
+
+  it('strips ANTHROPIC_API_KEY when oauthToken is passed', () => {
+    const env = buildClaudeSdkEnv(
+      { oauthToken: 'oat-test' },
+      { PATH: '/usr/bin', ANTHROPIC_API_KEY: 'sk-leak', CLAUDE_CODE_OAUTH_TOKEN: 'oat-old' },
+    );
+    expect(env).toBeDefined();
+    expect(env!.CLAUDE_CODE_OAUTH_TOKEN).toBe('oat-test');
+    expect(env!.ANTHROPIC_API_KEY).toBeUndefined();
+    expect('ANTHROPIC_API_KEY' in env!).toBe(false);
+    // Other env vars survive.
+    expect(env!.PATH).toBe('/usr/bin');
+  });
+
+  it('strips CLAUDE_CODE_OAUTH_TOKEN when apiKey is passed', () => {
+    const env = buildClaudeSdkEnv(
+      { apiKey: 'sk-test' },
+      { PATH: '/usr/bin', ANTHROPIC_API_KEY: 'sk-old', CLAUDE_CODE_OAUTH_TOKEN: 'oat-leak' },
+    );
+    expect(env!.ANTHROPIC_API_KEY).toBe('sk-test');
+    expect(env!.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+    expect('CLAUDE_CODE_OAUTH_TOKEN' in env!).toBe(false);
+    expect(env!.PATH).toBe('/usr/bin');
+  });
+
+  it('does not require the unused credential to exist in baseEnv', () => {
+    const env = buildClaudeSdkEnv(
+      { oauthToken: 'oat-test' },
+      { PATH: '/usr/bin' },
+    );
+    expect(env!.CLAUDE_CODE_OAUTH_TOKEN).toBe('oat-test');
+    expect('ANTHROPIC_API_KEY' in env!).toBe(false);
   });
 });
 

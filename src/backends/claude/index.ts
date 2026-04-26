@@ -95,6 +95,40 @@ export interface ClaudeBackendOptions {
 const STALE_SESSION_RE = /no conversation found|ENOENT.*\.jsonl|session.*not found/i;
 
 /**
+ * Build the env record passed to the SDK based on the typed auth fields.
+ * Returns `undefined` when neither field is set so the constructor can omit
+ * `env` entirely (the SDK then reads `process.env` itself).
+ *
+ * Critically: when one credential is passed, the other env var is stripped
+ * from the spread. The Claude SDK has no built-in preference when both
+ * `CLAUDE_CODE_OAUTH_TOKEN` and `ANTHROPIC_API_KEY` are present in `env`;
+ * if a caller passes `oauthToken` but their shell also has
+ * `ANTHROPIC_API_KEY` set, leaking the key in sdkEnv may silently route
+ * billing through the API key path — defeating the whole point of
+ * choosing OAuth. Mirror, reverse direction.
+ *
+ * Exported for unit testing.
+ */
+export function buildClaudeSdkEnv(
+  options: { oauthToken?: string; apiKey?: string },
+  baseEnv: Record<string, string | undefined>,
+): Record<string, string | undefined> | undefined {
+  if (options.oauthToken === undefined && options.apiKey === undefined) {
+    return undefined;
+  }
+  const sdkEnv: Record<string, string | undefined> = { ...baseEnv };
+  if (options.oauthToken !== undefined) {
+    sdkEnv.CLAUDE_CODE_OAUTH_TOKEN = options.oauthToken;
+    delete sdkEnv.ANTHROPIC_API_KEY;
+  }
+  if (options.apiKey !== undefined) {
+    sdkEnv.ANTHROPIC_API_KEY = options.apiKey;
+    delete sdkEnv.CLAUDE_CODE_OAUTH_TOKEN;
+  }
+  return sdkEnv;
+}
+
+/**
  * Push-based async iterable for streaming user messages into the SDK.
  *
  * `push()` accepts plain text (the public AgentQuery.push surface). The
@@ -208,12 +242,13 @@ export class ClaudeBackend implements Backend {
         ? { [MCP_SERVER_NAME]: createSdkMcpServer({ name: MCP_SERVER_NAME, tools: customSdkTools }) }
         : undefined;
 
-    let sdkEnv: Record<string, string | undefined> | undefined;
-    if (options.oauthToken !== undefined || options.apiKey !== undefined) {
-      sdkEnv = { ...process.env };
-      if (options.oauthToken !== undefined) sdkEnv.CLAUDE_CODE_OAUTH_TOKEN = options.oauthToken;
-      if (options.apiKey !== undefined) sdkEnv.ANTHROPIC_API_KEY = options.apiKey;
-    }
+    const sdkEnv = buildClaudeSdkEnv(
+      {
+        ...(options.oauthToken !== undefined && { oauthToken: options.oauthToken }),
+        ...(options.apiKey !== undefined && { apiKey: options.apiKey }),
+      },
+      process.env,
+    );
 
     this.sdkOptions = {
       ...(options.model !== undefined && { model: options.model }),
