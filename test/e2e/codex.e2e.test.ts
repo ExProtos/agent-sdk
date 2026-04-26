@@ -17,7 +17,6 @@ import {
   assembledText,
   codexE2eEnabled,
   collectEvents,
-  collectEventsVerbose,
   continuationFromEvents,
   toolCalls,
 } from './helpers';
@@ -29,8 +28,7 @@ describe.skipIf(!codexE2eEnabled)('Codex end-to-end', () => {
       const query = agent.run({
         message: 'Reply with exactly the word OK and nothing else.',
       });
-      // Verbose collector dumps every event to stderr as it arrives.
-      const events = await collectEventsVerbose(query, 'codex-trivial');
+      const events = await collectEvents(query);
 
       expect(events.find((e) => e.type === 'session_start')).toBeDefined();
       expect(events.find((e) => e.type === 'session_end')).toBeDefined();
@@ -90,7 +88,7 @@ describe.skipIf(!codexE2eEnabled)('Codex end-to-end', () => {
         message:
           'Call the currentTime tool with timezone "Asia/Tokyo". Then echo back exactly the value the tool returned.',
       });
-      const events = await collectEventsVerbose(query, 'codex-bridge');
+      const events = await collectEvents(query);
 
       // The closure ran in OUR process — verify side effects
       expect(invocations).toBeGreaterThanOrEqual(1);

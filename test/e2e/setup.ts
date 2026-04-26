@@ -38,8 +38,10 @@ if (fs.existsSync(resolved)) {
       loaded++;
     }
   }
-  if (loaded > 0) {
-    // Quiet log — useful when debugging skip behavior.
+  // Set AGENT_SDK_E2E_VERBOSE=1 to log how many env vars were loaded —
+  // useful when debugging "why is this test skipping" issues, otherwise
+  // just noise repeated per test file.
+  if (loaded > 0 && process.env.AGENT_SDK_E2E_VERBOSE === '1') {
     console.error(`[e2e] loaded ${loaded} env var(s) from ${envFile}`);
   }
 }
