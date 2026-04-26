@@ -163,7 +163,7 @@ Maps Codex's typed items to canonical events. Tool names reference `builtin.<too
 | `commandExecution` | `tool_call_end` named `bash` with `{command}` + `tool_result` (`output: aggregatedOutput ?? ''`, `isError: exitCode !== null && exitCode !== 0`) |
 | `fileChange` | `tool_call_end` named `edit` with `{changes}` + `tool_result` only when status is `completed`/`failed`/`declined` (skip `inProgress`) |
 | `plan` | `tool_call_end` named `todo` with `{text}` |
-| `collabAgentToolCall` | `tool_call_end` named `task` with `{tool, receiverThreadIds, prompt?, model?}` + `tool_result` only when status is `completed`/`failed` (skip `inProgress`) |
+| `collabAgentToolCall` | `tool_call_end` named `task` with `{tool, receiverThreadIds, prompt?, model?}` + `tool_result` only when status is `completed`/`failed` (skip `inProgress`). `tool_result.output` is `{status, agentsStates}` where `agentsStates` is a map of receiver thread id → `{status, message}` — the sub-agent's response text lives in `message`. Note: upstream's status enum has no `declined` variant (unlike `fileChange`); collab spawn isn't human-gated. |
 | `webSearch` (action `openPage`) | `tool_call_end` named `webFetch` with `{url}` |
 | `webSearch` (action `search`) | `tool_call_end` named `webSearch` with `{query}` and/or `{queries}` |
 | `webSearch` (action `findInPage`) | `tool_call_end` named `webSearch` with `{url, pattern}` |
@@ -175,6 +175,12 @@ Maps Codex's typed items to canonical events. Tool names reference `builtin.<too
 The `webSearch` case is a single Codex item that can mean any of three different things; mapping back to our two canonical names (`webFetch` vs. `webSearch`) is what gives consumers a single name to switch on.
 
 `fileChange` skipping `inProgress`: emitting a `tool_result` while the patch is still mid-application would orphan the tool_call once the final state arrives. Wait until the patch settles.
+
+### Duplicate `tool_call_end` is possible by design
+
+`translateItem` runs once per `item/completed` notification. For long-lived items (`fileChange`, `collabAgentToolCall`) Codex can emit `item/completed` multiple times for the same item id as the underlying state evolves — so consumers may see two `tool_call_end` events with the same `toolCall.id` and one `tool_result` (the final settle). This is intentional: the wrapper passes through what Codex emits rather than tracking item lifecycle.
+
+**Consumer rule:** if you're persisting a tool-call log, dedupe by `toolCall.id` and treat the latest `tool_call_end` for an id as authoritative. The matching `tool_result` (if any) always carries the final state. If you don't dedupe, you'll see two entries per long-lived call — annoying but not load-bearing for correctness.
 
 ## MCP bridge
 

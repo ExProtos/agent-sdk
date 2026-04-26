@@ -115,9 +115,17 @@ export type ThreadItem =
       tool: 'spawnAgent' | 'sendInput' | 'resumeAgent' | 'wait' | 'closeAgent';
       prompt: string | null;
       model: string | null;
+      // Carried by the protocol but we don't surface it on canonical events —
+      // it's a sub-agent dispatch knob, not interaction state. Add to input
+      // mapping if a consumer needs it.
       reasoningEffort: string | null;
       receiverThreadIds: string[];
       senderThreadId: string;
+      // Note: upstream's CollabAgentToolCallStatus enum is exactly these three
+      // values; unlike fileChange, there is no `declined` variant. If Codex
+      // grows one (e.g. for human-gated spawn), the translateItem branch must
+      // be widened to emit tool_result on it too — otherwise consumers wait
+      // forever.
       status: 'inProgress' | 'completed' | 'failed';
       agentsStates: Record<string, { status: string; message: string | null }>;
     }
