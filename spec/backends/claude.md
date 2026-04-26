@@ -9,17 +9,20 @@ Implementation: `src/backends/claude/index.ts`. Single file, ~330 LOC.
 ```typescript
 export interface ClaudeBackendOptions {
   tools?: Tool[];
+  model?: SDKOptions['model'];
+  effort?: SDKOptions['effort'];
   permissionMode?: SDKOptions['permissionMode'];
   systemPrompt?: SDKOptions['systemPrompt'];
   additionalDirectories?: string[];
-  env?: Record<string, string | undefined>;
+  oauthToken?: string;  // Pro/Max — mutually exclusive with apiKey
+  apiKey?: string;      // Anthropic API key — mutually exclusive with oauthToken
 }
 
 export class ClaudeBackend implements Backend { /* … */ }
 export function claude(options?: ClaudeBackendOptions): ClaudeBackend;
 ```
 
-`tools`, `permissionMode`, `systemPrompt`, `additionalDirectories`, and `env` all pass through to the SDK. We don't bake in defaults — including `permissionMode: 'bypassPermissions'`. Callers running unattended must opt in explicitly.
+`tools`, `model`, `effort`, `permissionMode`, `systemPrompt`, and `additionalDirectories` pass through to the SDK. We don't bake in defaults — including `permissionMode: 'bypassPermissions'`. Callers running unattended must opt in explicitly. `oauthToken` and `apiKey` are typed auth fields (see Auth below); the previous `env` passthrough was removed.
 
 ## Tool resolution
 
@@ -47,7 +50,16 @@ Complete content blocks (text/thinking/tool_use) surface as `text_end` / `thinki
 
 ## Auth
 
-`CLAUDE_CODE_OAUTH_TOKEN` (Pro/Max) or `ANTHROPIC_API_KEY` must be in env when the SDK starts. We don't validate; we let the SDK fail. When both are set, the SDK picks one — no built-in preference. The e2e tests (`test/e2e/claude.e2e.test.ts`) explicitly strip `ANTHROPIC_API_KEY` via `claudeOAuthPreferredEnv` so subscription billing is preferred over metered API calls.
+Two typed fields on `ClaudeBackendOptions`:
+
+- `oauthToken?: string` — Pro/Max subscription token. Equivalent to setting `CLAUDE_CODE_OAUTH_TOKEN` for the SDK.
+- `apiKey?: string` — Anthropic API key. Equivalent to setting `ANTHROPIC_API_KEY`.
+
+Mutually exclusive. Setting both throws at construction. When neither is set, the SDK falls back to ambient `process.env`.
+
+Wiring: when either field is set, the constructor builds a `{ ...process.env, <var>: <value> }` env record and passes it to the SDK as `query({ env })`. When both are unset, the SDK's `env` field is omitted entirely (the SDK then reads `process.env` itself). The previous `env?: Record<string, string | undefined>` passthrough was removed — non-auth env vars flow through ambient `process.env` because the SDK reads it by default.
+
+The e2e tests (`test/e2e/claude.e2e.test.ts`) prefer subscription auth via `claudeOAuthPreferredToken()` (returns the OAuth token only when both creds are present), so e2e billing routes through the user's Pro/Max plan rather than metered API calls.
 
 ## Construction
 

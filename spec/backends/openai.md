@@ -56,6 +56,12 @@ export interface OpenAIBackendOptions {
    * `useConversations: true`. Opt out explicitly with `autoCompact: false`.
    */
   autoCompact?: boolean;
+
+  // Auth (any subset → per-Backend OpenAIProvider; see Auth section).
+  apiKey?: string;
+  baseURL?: string;
+  organization?: string;
+  project?: string;
 }
 
 export class OpenAIBackend implements Backend { /* … */ }
@@ -410,7 +416,20 @@ The local Session paths (memory, JSONL) treat missing JSONL as "no prior history
 
 ## Auth
 
-`OPENAI_API_KEY` env (read by the SDK's default OpenAI client). We don't validate; we let the SDK fail. Documented explicitly: *"Use Codex backend if you want ChatGPT subscription auth (`codex login`); use this backend if you have an API key and want hosted tools, tracing, or programmatic agent orchestration."*
+Four typed fields on `OpenAIBackendOptions`:
+
+- `apiKey?: string` — OpenAI API key.
+- `baseURL?: string` — proxy / Azure / on-prem endpoint override.
+- `organization?: string` — OpenAI organization ID.
+- `project?: string` — OpenAI project ID.
+
+When any of these is set, the constructor builds a per-Backend `OpenAIProvider` (from `@openai/agents-openai`, re-exported via `@openai/agents`) and instantiates a `Runner({ modelProvider: provider })`. All `runner.run(...)` calls (the main stream and the nested sub-agent invocation in the `task` tool) use that Runner, so each Backend gets isolated auth.
+
+When all four are unset, the constructor builds a default `Runner()` whose default `modelProvider` reads `OPENAI_API_KEY` from ambient env — the historical behavior. This makes opt-in additive; existing callers don't have to change anything.
+
+Why `OpenAIProvider` and not `setDefaultOpenAIKey` / `setDefaultOpenAIClient`: the default-setters are process-global; calling them from a Backend constructor would race when multiple Backends coexist (last-wins). `OpenAIProvider` is per-Runner and matches the per-Backend model.
+
+Documented explicitly: *"Use Codex backend if you want ChatGPT subscription auth (`codex login`); use this backend if you have an API key and want hosted tools, tracing, or programmatic agent orchestration."*
 
 ## Compaction
 

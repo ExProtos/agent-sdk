@@ -15,10 +15,10 @@
  * - Coarse event translation: full items at `item/completed`. Streaming
  *   deltas (`item/agentMessage/delta`, `item/reasoning/textDelta`) are
  *   surfaced as text_delta / thinking_delta events
- * - Auth: pass `apiKey` (writes a wrapper-managed auth.json) and/or
- *   `profile` (named slot under ~/.agent-sdk/codex/<cwdHash>/<profile>/).
- *   Without either, Codex falls back to ambient ~/.codex/auth.json from
- *   `codex login`; query() errors with a clear message if not logged in.
+ * - Auth: pass `codexHome` to point the codex CLI at a specific
+ *   `CODEX_HOME` directory (where `auth.json` and session state live).
+ *   Without it, Codex uses its default `~/.codex/`. The caller is
+ *   responsible for populating `auth.json` via `codex login`.
  */
 
 import { fileURLToPath } from 'node:url';
@@ -28,8 +28,6 @@ import type { Tool } from '../../tools/types';
 import * as builtin from '../../tools/builtin';
 import { CodexClient, CodexRpcError, type CodexClientOptions } from './client';
 import { McpBridge, type BridgeConfig } from './mcp-bridge';
-import { resolveProfileSlot } from './profileSlot';
-import { codexLogin, type LoginOptions, type LoginResult } from './login';
 import type {
   GetAccountResponse,
   ServerNotification,
@@ -59,32 +57,24 @@ export interface CodexBackendOptions {
   /** Append to Codex's developer instructions (similar to systemPromptAppend). */
   developerInstructions?: string;
   /**
-   * Profile name. Identifies a wrapper-managed `CODEX_HOME` slot under
-   * `~/.agent-sdk/codex/<cwdHash>/<profile>/`. Defaults to `'default'`
-   * when `apiKey` is set; unset on its own falls back to ambient
-   * `~/.codex/`. The profile owns session/history state — rotating the
-   * API key within the same profile preserves it.
+   * Path to a `CODEX_HOME` directory (the codex CLI reads `auth.json` and
+   * stores `sessions/`, `history.jsonl`, etc. under this dir). When set,
+   * the wrapper merges `CODEX_HOME=<codexHome>` into the spawn env for
+   * the `codex app-server` subprocess. When unset, the codex CLI uses
+   * its default `~/.codex/`.
+   *
+   * The caller is responsible for populating `auth.json`. Run
+   * `CODEX_HOME=<codexHome> codex login` (ChatGPT OAuth) or
+   * `CODEX_HOME=<codexHome> codex login --with-api-key` (API key) once;
+   * subsequent constructions reuse the file.
    */
-  profile?: string;
-  /**
-   * OpenAI API key. When set, the wrapper writes (or refreshes) an
-   * `auth.json` (`{auth_mode: "ApiKey", OPENAI_API_KEY: <key>}`) into
-   * the profile's `CODEX_HOME`. May be combined with `profile`; on its
-   * own, the slot defaults to `'default'`.
-   */
-  apiKey?: string;
-  /**
-   * Override the cwd used to derive the per-project profile slot AND
-   * the codex app-server subprocess's working directory. Defaults to
-   * `process.cwd()`. Pass an explicit value when constructing a Backend
-   * from a different working directory than where you ran `codex.login()`
-   * — same-cwd is required for the slots to match.
-   */
-  cwd?: string;
+  codexHome?: string;
   /** Override the codex binary. Defaults to `codex` on PATH. */
   command?: string;
   /** Override the codex subcommand args. Defaults to `['app-server']`. */
   args?: string[];
+  /** Override the codex app-server subprocess's working directory. */
+  cwd?: string;
 }
 
 const STALE_THREAD_RE = /thread.*not found|no such thread|thread.*does not exist/i;
@@ -92,7 +82,7 @@ const STALE_THREAD_RE = /thread.*not found|no such thread|thread.*does not exist
 class CodexAuthRequiredError extends Error {
   constructor() {
     super(
-      'codex is not logged in. Run `codex login` or set up a profile via `codex.login({ profile })` before using this backend.',
+      'codex is not logged in. Run `codex login` (optionally with `CODEX_HOME=<codexHome> codex login` for a custom dir) before using this backend.',
     );
     this.name = 'CodexAuthRequiredError';
   }
@@ -115,13 +105,8 @@ export class CodexBackend implements Backend {
   private bridgeConfig: BridgeConfig | null = null;
 
   constructor(options: CodexBackendOptions = {}) {
-    const slot = resolveProfileSlot({
-      ...(options.apiKey !== undefined && { apiKey: options.apiKey }),
-      ...(options.profile !== undefined && { profile: options.profile }),
-      ...(options.cwd !== undefined && { cwd: options.cwd }),
-    });
-
-    const env = slot !== undefined ? { CODEX_HOME: slot.codexHome } : undefined;
+    const env =
+      options.codexHome !== undefined ? { CODEX_HOME: options.codexHome } : undefined;
 
     const clientOptions: CodexClientOptions = {
       ...(options.command !== undefined && { command: options.command }),
@@ -322,17 +307,9 @@ export class CodexBackend implements Backend {
   }
 }
 
-export interface CodexFactory {
-  (options?: CodexBackendOptions): CodexBackend;
-  login(opts?: LoginOptions): Promise<LoginResult>;
+export function codex(options?: CodexBackendOptions): CodexBackend {
+  return new CodexBackend(options);
 }
-
-export const codex: CodexFactory = Object.assign(
-  function codex(options?: CodexBackendOptions): CodexBackend {
-    return new CodexBackend(options);
-  },
-  { login: codexLogin },
-);
 
 // ── Event translation ──
 

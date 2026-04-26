@@ -1,7 +1,4 @@
-import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import * as fs from 'node:fs';
-import * as os from 'node:os';
-import * as path from 'node:path';
+import { describe, expect, it } from 'vitest';
 import {
   CodexBackend,
   EventQueue,
@@ -824,62 +821,13 @@ describe('CodexBackend', () => {
     });
   });
 
-  describe('per-Backend auth (profile / apiKey / cwd)', () => {
-    let tmpHome: string;
-    let realHome: string | undefined;
-
-    beforeEach(() => {
-      tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-sdk-codex-auth-'));
-      realHome = process.env.HOME;
-      process.env.HOME = tmpHome;
+  describe('codexHome passthrough', () => {
+    it('accepts codexHome and constructs without throwing', () => {
+      expect(() => codex({ codexHome: '/tmp/some-codex-home' })).not.toThrow();
     });
 
-    afterEach(() => {
-      if (realHome !== undefined) process.env.HOME = realHome;
-      else delete process.env.HOME;
-      fs.rmSync(tmpHome, { recursive: true, force: true });
-    });
-
-    it('apiKey alone constructs and writes auth.json under HOME/.agent-sdk/codex/', () => {
-      expect(() => codex({ apiKey: 'sk-test', cwd: tmpHome })).not.toThrow();
-      const root = path.join(tmpHome, '.agent-sdk', 'codex');
-      expect(fs.existsSync(root)).toBe(true);
-    });
-
-    it('profile alone with missing auth.json throws not-initialized error', () => {
-      expect(() => codex({ profile: 'work', cwd: tmpHome })).toThrow(
-        /not initialized.*codex login/s,
-      );
-    });
-
-    it('profile + apiKey overwrites existing auth.json unconditionally', () => {
-      // Pre-seed an OAuth-style auth.json
-      const dir = path.join(
-        tmpHome,
-        '.agent-sdk',
-        'codex',
-        // cwdHash isn't easy to compute here without duplicating profileSlot
-        // logic; rely on the directory existing after the first construction.
-      );
-      // Construct once with apiKey to materialize the dir
-      codex({ profile: 'work', apiKey: 'sk-old', cwd: tmpHome });
-
-      // Now overwrite with a different key
-      codex({ profile: 'work', apiKey: 'sk-new', cwd: tmpHome });
-
-      // Walk the codex/ tree to find the auth.json (only one slot should exist)
-      const slot = fs
-        .readdirSync(path.join(dir))
-        .map((cwdHash) => path.join(dir, cwdHash, 'work', 'auth.json'))
-        .find((p) => fs.existsSync(p));
-      expect(slot).toBeDefined();
-      const parsed = JSON.parse(fs.readFileSync(slot!, 'utf8'));
-      expect(parsed.OPENAI_API_KEY).toBe('sk-new');
-    });
-
-    it('no profile / no apiKey → no slot dir created (ambient ~/.codex/ fallback)', () => {
-      codex({ cwd: tmpHome });
-      expect(fs.existsSync(path.join(tmpHome, '.agent-sdk'))).toBe(false);
+    it('accepts no codexHome (falls back to ambient ~/.codex/)', () => {
+      expect(() => codex({})).not.toThrow();
     });
   });
 });

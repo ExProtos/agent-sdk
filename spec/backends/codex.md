@@ -18,10 +18,19 @@ src/backends/codex/
 ## Public API
 
 ```typescript
-export interface CodexBackendOptions extends CodexClientOptions {
+export interface CodexBackendOptions {
   tools?: Tool[];
   model?: string;
+  effort?: CodexEffort;
   developerInstructions?: string;
+
+  /** Path to a CODEX_HOME directory. See Auth below. */
+  codexHome?: string;
+
+  // Subprocess plumbing — defaults spawn `codex app-server` on PATH.
+  command?: string;
+  args?: string[];
+  cwd?: string;
 }
 
 export class CodexBackend implements Backend {
@@ -31,7 +40,7 @@ export class CodexBackend implements Backend {
 export function codex(options?: CodexBackendOptions): CodexBackend;
 ```
 
-`CodexClientOptions` (from `client.ts`): `{ command?, args?, env?, cwd? }` — defaults to spawning `codex app-server` on `PATH`.
+`CodexBackendOptions` no longer extends `CodexClientOptions` and no longer accepts an `env` passthrough — auth is the single typed field `codexHome`. `command`/`args`/`cwd` cover the legitimate subprocess overrides.
 
 ## v0 scope
 
@@ -299,13 +308,30 @@ Note: Codex doesn't pin the model on resume — `model` is only valid on `thread
 - `ensureBridge()`: lazy-starts the bridge if `customTools.length > 0`. Single shared bridge.
 - `close()`: awaits client, kills it, then stops the bridge. Idempotent.
 
-## Auth verification
+## Auth
+
+One typed field on `CodexBackendOptions`:
+
+- `codexHome?: string` — path to a `CODEX_HOME` directory (where the codex CLI reads `auth.json` and writes `sessions/`, `history.jsonl`). When set, the wrapper merges `CODEX_HOME=<codexHome>` into the spawn env for `codex app-server`. When unset, the codex CLI uses its default `~/.codex/`.
+
+The wrapper does not manage credentials. The caller picks where auth lives and runs the relevant `codex login` command once:
+
+```
+CODEX_HOME=/path/to/profile codex login                  # ChatGPT OAuth
+CODEX_HOME=/path/to/profile codex login --with-api-key   # API key
+```
+
+Subsequent constructions reuse the file. Multiple Backend instances pointed at different `codexHome` dirs run with isolated credentials and isolated session/history state in the same process.
+
+The previous `env?: Record<string, string | undefined>` passthrough was removed. Non-auth env vars (proxies, debug flags) flow through ambient `process.env` because `codex app-server` reads it by default.
+
+## Auth verification (runtime)
 
 Before doing anything else, `query()` calls `account/read`. If `account` is null, push:
 
 ```typescript
 new CodexAuthRequiredError(
-  'codex is not logged in. Run `codex login` (for ChatGPT) or set OPENAI_API_KEY before using this backend.',
+  'codex is not logged in. Run `codex login` (optionally with `CODEX_HOME=<codexHome> codex login` for a custom dir) before using this backend.',
 )
 ```
 

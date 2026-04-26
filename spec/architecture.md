@@ -245,7 +245,7 @@ Per-tool details are in [tools.md](tools.md).
 | Custom tools | In-process via `createSdkMcpServer` (closures stay local) | Routed through MCP bridge (subprocess shim + Unix socket) | Wrapped via AI SDK `tool()` helper directly | Wrapped via SDK's `tool()` helper directly |
 | Continuation | Session UUID from `system/init` message | Thread ID from `thread/start` response (`{thread:{id}}`) | Minted UUID; persisted as JSONL under `<cwd>/.agent-sdk/sessions/` | Minted UUID for memory/JSONL; OpenAI conversation ID when `useConversations: true` |
 | Streaming | `text_end` / `thinking_end` / `tool_call_end` only (coarse) | `text_delta` / `thinking_delta` (streaming) + `*_end` | `text_delta` / `thinking_delta` (streaming) + `*_end` | `text_delta` / `thinking_delta` (streaming) + `*_end` |
-| Auth | `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` (env, read by SDK) | `~/.codex/auth.json` (from `codex login`) or `OPENAI_API_KEY` (env) | Provider-dependent (varies by `LanguageModel`) | `OPENAI_API_KEY` (env, read by SDK) |
+| Auth | `oauthToken`/`apiKey` typed fields (mutually exclusive); falls back to ambient `CLAUDE_CODE_OAUTH_TOKEN`/`ANTHROPIC_API_KEY` | `codexHome` field passed as `CODEX_HOME` env to the spawn; falls back to ambient `~/.codex/`. Caller manages `auth.json` (run `CODEX_HOME=<dir> codex login`). | Provider-dependent (varies by `LanguageModel`) | `apiKey`/`baseURL`/`organization`/`project` typed fields → per-instance `OpenAIProvider`; falls back to `OPENAI_API_KEY` |
 | `push()` mid-turn | Supported (SDK has a streaming user-message iterator) | Not supported — `push` errors; caller should `end()` + `run()` with continuation | Supported via internal queue + chained `streamText` turns | Not supported — `push` errors; caller should `end()` + `run()` with continuation |
 | Subprocess | None | One `codex app-server` per backend instance, lazily spawned, killed on `close()` | None | None |
 | Persistence | SDK-native (`~/.claude/projects/`) | SDK-native (`~/.codex/sessions/` + sqlite index) | We own it (UIMessage[] JSONL — see Persistence below) | Memory-only by default; opt-in JSONL via `sessionsDir` (our `JsonlSession` impl, AgentInputItem[]); opt-in OpenAI Conversations |
@@ -335,19 +335,18 @@ When the stored token becomes invalid (session purged, transcript missing, daemo
 
 ## Auth
 
-The wrapper passes through whatever the underlying SDK reads.
+Each backend exposes typed auth fields on its options; ambient env is the fallback when nothing is passed.
 
-| Backend | Mechanism |
-|---|---|
-| Claude (Pro/Max) | `CLAUDE_CODE_OAUTH_TOKEN` env (run `claude setup-token` once) |
-| Claude (API key) | `ANTHROPIC_API_KEY` env |
-| Codex (subscription) | `~/.codex/auth.json` from `codex login` |
-| Codex (API key) | `OPENAI_API_KEY` env |
-| Vercel | Provider-dependent. `@ai-sdk/anthropic` reads `ANTHROPIC_API_KEY` (does NOT accept Claude Code's OAuth token); `@ai-sdk/openai` reads `OPENAI_API_KEY`; `@ai-sdk/openai-compatible` typically needs no auth for local endpoints but accepts `apiKey` in the model factory. |
+| Backend | Typed fields | Env fallback |
+|---|---|---|
+| Claude | `oauthToken` (Pro/Max — `claude setup-token`) or `apiKey`. Mutually exclusive. | `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY` |
+| Codex | `codexHome` — path to a `CODEX_HOME` directory. The wrapper passes it through as the spawn env var; the caller is responsible for populating `auth.json` (e.g. `CODEX_HOME=<dir> codex login`). | ambient `~/.codex/` (current `codex login` flow — used when `codexHome` is unset) |
+| Vercel | none — auth lives inside the `LanguageModel` constructor (`@ai-sdk/anthropic`, `@ai-sdk/openai`, …). | provider-dependent. `@ai-sdk/anthropic` reads `ANTHROPIC_API_KEY` (does NOT accept Claude Code's OAuth token); `@ai-sdk/openai` reads `OPENAI_API_KEY`. |
+| OpenAI | `apiKey`, `baseURL`, `organization`, `project`. When any are set the backend builds a per-instance `OpenAIProvider` and wires it through the SDK's `Runner`. | `OPENAI_API_KEY` (read by the SDK's default OpenAI client) |
 
 Subscription OAuth is licensed for personal use; multi-user products should use API keys. The wrapper enforces nothing — it's the consumer's responsibility to read the licensing terms.
 
-The Codex backend explicitly verifies auth on each `query()` by calling `account/read` first; if `account` is null, it emits an `error` event with `"codex is not logged in. Run \`codex login\` (for ChatGPT) or set OPENAI_API_KEY before using this backend."` and ends the query cleanly.
+The Codex backend explicitly verifies auth on each `query()` by calling `account/read` first; if `account` is null, it emits an `error` event with `"codex is not logged in. Run \`codex login\` (optionally with \`CODEX_HOME=<codexHome> codex login\` for a custom dir) before using this backend."` and ends the query cleanly.
 
 ## Packaging
 
