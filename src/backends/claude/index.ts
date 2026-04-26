@@ -104,6 +104,11 @@ export class ClaudeBackend implements Backend {
 
   private readonly tools: Tool[];
   private readonly canonicalByWireName: Map<string, string>;
+  // Canonical names of tools registered with a wrapped `{input: …}` shape
+  // because their schema isn't an object literal. The handler unwraps
+  // `args.input` before calling the user's execute, and event translation
+  // unwraps `block.input.input` so consumers see the canonical shape.
+  private readonly wrappedToolNames: Set<string>;
   private readonly sdkOptions: Pick<
     SDKOptions,
     | 'permissionMode'
@@ -119,6 +124,7 @@ export class ClaudeBackend implements Backend {
 
     const allowedTools: string[] = [];
     this.canonicalByWireName = new Map();
+    this.wrappedToolNames = new Set();
     const customSdkTools: ReturnType<typeof claudeTool>[] = [];
 
     for (const t of this.tools) {
@@ -128,21 +134,15 @@ export class ClaudeBackend implements Backend {
         continue;
       }
       if (t.execute === undefined) continue; // nothing to register
-      const shape = extractObjectShape(t);
-      if (shape === undefined) {
-        // Non-object schema (union, array, etc.) — Claude's SDK MCP server
-        // requires a raw object shape. Skip with a stderr breadcrumb so the
-        // caller notices.
-        // eslint-disable-next-line no-console
-        console.error(
-          `[claude] tool '${t.name}' has a non-object schema; cannot register as in-process MCP tool. Skipping.`,
-        );
-        continue;
-      }
+      const { shape, wrapped } = extractToolShape(t);
+      if (wrapped) this.wrappedToolNames.add(t.name);
       const exec = t.execute;
       customSdkTools.push(
         claudeTool(t.name, t.description, shape, async (args, _extra) => {
-          const result = await exec(args);
+          // For wrapped schemas the model emits `{input: <actualArgs>}`;
+          // unwrap before handing to the user's execute.
+          const actualArgs = wrapped ? (args as unknown as { input: unknown }).input : args;
+          const result = await exec(actualArgs);
           return {
             content: [{ type: 'text', text: typeof result === 'string' ? result : JSON.stringify(result) }],
           };
@@ -193,13 +193,14 @@ export class ClaudeBackend implements Backend {
 
     let aborted = false;
     const nameMap = this.canonicalByWireName;
+    const wrapped = this.wrappedToolNames;
 
     async function* events(): AsyncGenerator<AgentEvent> {
       try {
         for await (const message of sdkResult) {
           if (aborted) return;
           yield { type: 'activity' };
-          yield* translateMessage(message, nameMap);
+          yield* translateMessage(message, nameMap, wrapped);
           // SDK keeps its async iterator alive as long as the input stream
           // is open (so callers can push() more messages mid-conversation).
           // For our turn-scoped query model, the 'result' message means
@@ -241,10 +242,16 @@ export function claude(options?: ClaudeBackendOptions): ClaudeBackend {
  * wire name is in the map, we emit the canonical name. Unknown tools (custom
  * MCP, or built-ins not in the user's tools list) fall through to the wire
  * name unchanged.
+ *
+ * `wrappedToolNames` is the set of canonical names whose schemas were promoted
+ * to `{input: <schema>}` at registration time (because they weren't object
+ * literals — unions, arrays, etc.). For these, the model emits arguments
+ * wrapped in `.input`; we unwrap so consumers see the canonical shape.
  */
 export function* translateMessage(
   message: SDKMessage,
   canonicalByWireName?: Map<string, string>,
+  wrappedToolNames?: Set<string>,
 ): Generator<AgentEvent> {
   if (message.type === 'system' && message.subtype === 'init') {
     yield { type: 'session_start', continuation: message.session_id };
@@ -259,9 +266,16 @@ export function* translateMessage(
         yield { type: 'thinking_end', text: block.thinking };
       } else if (block.type === 'tool_use') {
         const name = canonicalByWireName?.get(block.name) ?? block.name;
+        const input =
+          wrappedToolNames?.has(name) &&
+          typeof block.input === 'object' &&
+          block.input !== null &&
+          'input' in block.input
+            ? (block.input as { input: unknown }).input
+            : block.input;
         yield {
           type: 'tool_call_end',
-          toolCall: { id: block.id, name, input: block.input },
+          toolCall: { id: block.id, name, input },
         };
       }
     }
@@ -306,15 +320,19 @@ export function* translateMessage(
 }
 
 /**
- * Extract a Zod object's raw shape if the schema is z.object(...). Returns
- * undefined for unions, arrays, primitives, or anything else that doesn't
- * fit Claude SDK's tool() helper, which requires a raw shape (Record<string,
- * ZodType>) — not a full ZodType.
+ * Determine the raw shape to register with the Claude SDK's `tool()` helper,
+ * which requires `Record<string, ZodType>` (the inner shape of `z.object()`).
+ *
+ * - Object schemas pass through directly: `{shape: t.schema.shape, wrapped: false}`.
+ * - Non-object schemas (unions, arrays, primitives) are promoted to
+ *   `{input: t.schema}` and marked `wrapped: true`. The model then emits
+ *   `{input: <actualArgs>}`, which we unwrap on the handler side and in
+ *   event translation so the consumer sees the canonical shape unchanged.
  */
-function extractObjectShape(t: Tool): ZodRawShape | undefined {
+function extractToolShape(t: Tool): { shape: ZodRawShape; wrapped: boolean } {
   const schema = t.schema as unknown as Partial<ZodObject<ZodRawShape>>;
   if (schema && typeof schema === 'object' && 'shape' in schema && typeof schema.shape === 'object') {
-    return schema.shape as ZodRawShape;
+    return { shape: schema.shape as ZodRawShape, wrapped: false };
   }
-  return undefined;
+  return { shape: { input: t.schema } as unknown as ZodRawShape, wrapped: true };
 }

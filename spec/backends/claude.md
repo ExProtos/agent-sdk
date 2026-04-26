@@ -2,7 +2,7 @@
 
 Wraps `@anthropic-ai/claude-agent-sdk`. The SDK owns the agent loop, multi-step tool execution, system prompt assembly, and credential reading. We translate its events into `AgentEvent` and supply the user's tool selection.
 
-Implementation: `src/backends/claude/index.ts`. Single file, ~250 LOC.
+Implementation: `src/backends/claude/index.ts`. Single file, ~330 LOC.
 
 ## Public API
 
@@ -21,29 +21,70 @@ export function claude(options?: ClaudeBackendOptions): ClaudeBackend;
 
 `tools`, `permissionMode`, `systemPrompt`, `additionalDirectories`, and `env` all pass through to the SDK. We don't bake in defaults — including `permissionMode: 'bypassPermissions'`. Callers running unattended must opt in explicitly.
 
-## v0 scope
+## Tool resolution
 
-- **Native tools only.** Tools with `Tool.native.claude` set are added to `allowedTools`. Tools without a `native.claude` mapping are silently skipped — in-process MCP registration for custom tools on Claude is a future addition. (On Codex these would route through the MCP bridge instead.)
-- **Coarse event translation.** Complete content blocks (text/thinking/tool_use) surface as `text_end` / `thinking_end` / `tool_call_end`. No streaming deltas yet — the SDK exposes them, but mapping is deferred.
-- **Auth: caller's responsibility.** `CLAUDE_CODE_OAUTH_TOKEN` (Pro/Max) or `ANTHROPIC_API_KEY` must be in env when the SDK starts. We don't validate; we let the SDK fail.
+For each tool the consumer passes:
+
+| Condition | Treatment |
+|---|---|
+| `t.native?.claude` set | Wire name added to `allowedTools`; the SDK runs its built-in. `execute` is **not** called. |
+| Has `execute`, no `native.claude` | Registered as an in-process MCP tool via `createSdkMcpServer`. Wire name becomes `mcp__agent-sdk-tools__<canonical>`; closure runs in the parent process. |
+| No `native.claude` and no `execute` | Silently skipped — nothing to register. |
+
+Custom tools (the second row) get an in-process SDK MCP server — **no subprocess shim** like Codex needs. Claude SDK ships `createSdkMcpServer({name, tools})` and a `tool(name, description, rawShape, handler)` helper that takes a live `McpServer` instance directly, so closures stay in the parent process and we avoid the Unix-socket bridge architecture.
+
+### Schema shape promotion
+
+Claude SDK's `tool()` helper requires `AnyZodRawShape` — the inner shape of a `z.object()`, not a full ZodType. For canonical tools whose schemas are object literals (`bash`, `read`, `write`, `glob`, `grep`, `webFetch`, `webSearch`), we pass `t.schema.shape` directly.
+
+For non-object schemas (unions, arrays, primitives — none of our canonical tools, but custom user tools may use them) we promote: register with shape `{input: t.schema}` and mark the canonical name in a `wrappedToolNames: Set<string>`. The model emits `{input: <actualArgs>}`; the handler unwraps `args.input` before calling the user's `execute`, and event translation unwraps `block.input.input` so consumers see the canonical shape unchanged in `tool_call_end` events.
+
+This is transparent to both the consumer and the `execute` body. The wrapper level only exists in the JSON Schema the model sees and in the SDK's tool_use block input.
+
+### Coarse event translation
+
+Complete content blocks (text/thinking/tool_use) surface as `text_end` / `thinking_end` / `tool_call_end`. No streaming deltas yet — the SDK exposes them, but mapping is deferred.
+
+## Auth
+
+`CLAUDE_CODE_OAUTH_TOKEN` (Pro/Max) or `ANTHROPIC_API_KEY` must be in env when the SDK starts. We don't validate; we let the SDK fail. When both are set, the SDK picks one — no built-in preference. The e2e tests (`test/e2e/claude.e2e.test.ts`) explicitly strip `ANTHROPIC_API_KEY` via `claudeOAuthPreferredEnv` so subscription billing is preferred over metered API calls.
 
 ## Construction
 
 ```typescript
 constructor(options: ClaudeBackendOptions = {}) {
   this.tools = options.tools ?? [];
-  // Build canonicalByWireName: wire name (e.g. 'Bash') → canonical name ('bash').
-  // Used to rewrite tool names in tool_call_end events.
   const allowedTools: string[] = [];
+  this.canonicalByWireName = new Map();
+  this.wrappedToolNames = new Set();
+  const customSdkTools: ReturnType<typeof claudeTool>[] = [];
+
   for (const t of this.tools) {
     if (t.native?.claude) {
       allowedTools.push(t.native.claude);
       this.canonicalByWireName.set(t.native.claude, t.name);
+      continue;
     }
+    if (t.execute === undefined) continue;
+    const { shape, wrapped } = extractToolShape(t);
+    if (wrapped) this.wrappedToolNames.add(t.name);
+    customSdkTools.push(claudeTool(t.name, t.description, shape, async (args) => {
+      const actualArgs = wrapped ? (args as { input: unknown }).input : args;
+      const result = await t.execute!(actualArgs);
+      return { content: [{ type: 'text', text: typeof result === 'string' ? result : JSON.stringify(result) }] };
+    }));
+    const wire = `mcp__agent-sdk-tools__${t.name}`;
+    allowedTools.push(wire);
+    this.canonicalByWireName.set(wire, t.name);
   }
-  this.sdkOptions = {
-    ...permissionMode, ...systemPrompt, ...additionalDirectories, ...env,
+
+  const mcpServers = customSdkTools.length > 0
+    ? { 'agent-sdk-tools': createSdkMcpServer({ name: 'agent-sdk-tools', tools: customSdkTools }) }
+    : undefined;
+
+  this.sdkOptions = { ...permissionMode, ...systemPrompt, ...additionalDirectories, ...env,
     ...(allowedTools.length > 0 && { allowedTools }),
+    ...(mcpServers !== undefined && { mcpServers }),
   };
 }
 ```
@@ -177,5 +218,4 @@ These three patterns cover the SDK errors when the resume target doesn't exist o
 ## What we don't do
 
 - **No streaming deltas.** The SDK's `partial_message` events go untranslated. Adding them would require tracking accumulated text per content block and emitting `text_start` / `text_delta` accordingly.
-- **No custom tool registration.** Future work — the SDK supports MCP tools via `mcpServers` option, similar in shape to Codex's `mcp_servers` config. The wrapper would spawn a similar shim or expose an in-process MCP server. For v0, only `native.claude` matters.
 - **No interrupt API beyond stream end.** The SDK doesn't expose a turn-interrupt explicitly; aborting closes the input stream and the SDK eventually settles.

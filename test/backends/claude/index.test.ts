@@ -368,8 +368,9 @@ describe('ClaudeBackend', () => {
     // round trip end-to-end. Construction not throwing is the smoke check.
   });
 
-  it('warns and skips tools with non-object schemas (unions, arrays)', () => {
-    // Capture stderr to verify the warning fires.
+  it('promotes non-object schemas (unions, arrays) to {input: schema} wrappers', () => {
+    // Should NOT warn and NOT skip — the tool is registered with a wrapped
+    // shape, transparent to both the consumer and the user's execute.
     const errs: string[] = [];
     const origError = console.error;
     console.error = (msg: unknown) => {
@@ -386,9 +387,70 @@ describe('ClaudeBackend', () => {
       ];
       const backend = claude({ tools });
       expect(backend.name).toBe('claude');
-      expect(errs.some((e) => e.includes('non-object schema') && e.includes('unionTool'))).toBe(true);
+      expect(errs.length).toBe(0);
     } finally {
       console.error = origError;
     }
+  });
+});
+
+describe('translateMessage with wrapped tools', () => {
+  it('unwraps `.input` for tools registered with a promoted schema', () => {
+    const nameMap = new Map([['mcp__agent-sdk-tools__unionTool', 'unionTool']]);
+    const wrapped = new Set(['unionTool']);
+    const events = [
+      ...translateMessage(
+        {
+          type: 'assistant',
+          message: {
+            content: [
+              {
+                type: 'tool_use',
+                id: 'tu_99',
+                name: 'mcp__agent-sdk-tools__unionTool',
+                input: { input: { a: 'hello' } },
+              },
+            ],
+          },
+        } as unknown as SDKMessage,
+        nameMap,
+        wrapped,
+      ),
+    ];
+    expect(events).toEqual([
+      {
+        type: 'tool_call_end',
+        toolCall: { id: 'tu_99', name: 'unionTool', input: { a: 'hello' } },
+      },
+    ]);
+  });
+
+  it('leaves input untouched when tool is not in wrapped set', () => {
+    const nameMap = new Map([['Bash', 'bash']]);
+    const events = [
+      ...translateMessage(
+        {
+          type: 'assistant',
+          message: {
+            content: [
+              {
+                type: 'tool_use',
+                id: 'tu_1',
+                name: 'Bash',
+                input: { command: 'ls' },
+              },
+            ],
+          },
+        } as unknown as SDKMessage,
+        nameMap,
+        new Set(),
+      ),
+    ];
+    expect(events).toEqual([
+      {
+        type: 'tool_call_end',
+        toolCall: { id: 'tu_1', name: 'bash', input: { command: 'ls' } },
+      },
+    ]);
   });
 });
