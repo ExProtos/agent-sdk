@@ -257,3 +257,40 @@ export const all: Tool[] = [
   todo,
   task,
 ];
+
+/**
+ * Replace `execute` on tools by canonical name. Returns a NEW Tool[] —
+ * the inputs are not mutated. Other fields (schema, description, native)
+ * are preserved from the base tool.
+ *
+ * Throws on keys that don't match any tool in `base` — catches typos and
+ * stale references after a tool gets renamed.
+ *
+ * Use this to swap our anemic defaults for production-ready impls
+ * (rendering web fetch, real search providers) and to plug execute
+ * bodies into tools that ship without one (`webSearch`, `todo`, `task`):
+ *
+ * ```typescript
+ * const myTools = withImpls(tools.all, {
+ *   webFetch: async ({ url }) => fetchAndRenderMarkdown(url),
+ *   webSearch: async ({ query }) => brave.search(query),
+ * });
+ * vercel({ tools: myTools });
+ * ```
+ */
+export function withImpls(
+  base: Tool[],
+  overrides: Record<string, (input: any) => Promise<unknown>>,
+): Tool[] {
+  const byName = new Map(base.map((t) => [t.name, t]));
+  for (const name of Object.keys(overrides)) {
+    if (!byName.has(name)) {
+      throw new Error(
+        `withImpls: no tool named '${name}' in base — known: ${[...byName.keys()].join(', ')}`,
+      );
+    }
+  }
+  return base.map((t) =>
+    overrides[t.name] !== undefined ? { ...t, execute: overrides[t.name]! } : t,
+  );
+}

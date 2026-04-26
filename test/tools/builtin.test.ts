@@ -10,6 +10,7 @@ import {
   todo,
   webFetch,
   webSearch,
+  withImpls,
   write,
 } from '../../src/tools/builtin';
 import type { Tool } from '../../src/tools/types';
@@ -214,5 +215,59 @@ describe('Tool type guarantees', () => {
   it('every tool can be passed where a Tool is expected', () => {
     const list: Tool[] = [bash, read, write, edit, glob, grep, webFetch, webSearch, todo, task];
     expect(list.length).toBe(10);
+  });
+});
+
+describe('withImpls', () => {
+  it('replaces execute on the named tool, leaves others untouched', () => {
+    const myFetch = async ({ url }: { url: string }) => `body of ${url}`;
+    const result = withImpls(all, { webFetch: myFetch });
+
+    const overridden = result.find((t) => t.name === 'webFetch')!;
+    expect(overridden.execute).toBe(myFetch);
+    // Schema and other fields preserved.
+    expect(overridden.schema).toBe(webFetch.schema);
+    expect(overridden.description).toBe(webFetch.description);
+    expect(overridden.native).toEqual(webFetch.native);
+
+    // Other tools untouched (same object reference, since we only clone
+    // entries that get an override).
+    expect(result.find((t) => t.name === 'bash')).toBe(bash);
+    expect(result.find((t) => t.name === 'read')).toBe(read);
+  });
+
+  it('plugs execute into a tool that ships without one (webSearch)', () => {
+    const mySearch = async ({ query }: { query: string }) => `results for ${query}`;
+    const result = withImpls(all, { webSearch: mySearch });
+    const ws = result.find((t) => t.name === 'webSearch')!;
+    expect(ws.execute).toBe(mySearch);
+  });
+
+  it('does not mutate the input array', () => {
+    const before = all.map((t) => t.execute);
+    withImpls(all, { webFetch: async () => 'x' });
+    const after = all.map((t) => t.execute);
+    expect(after).toEqual(before);
+  });
+
+  it('throws on an unknown tool name', () => {
+    expect(() => withImpls(all, { not_a_tool: async () => '' })).toThrow(/no tool named 'not_a_tool'/);
+  });
+
+  it('lists known tool names in the error', () => {
+    expect(() => withImpls(all, { typo: async () => '' })).toThrow(/bash, read, write/);
+  });
+
+  it('returns the array unchanged when overrides is empty', () => {
+    const result = withImpls(all, {});
+    expect(result).toEqual(all);
+  });
+
+  it('handles multiple overrides at once', () => {
+    const a = async () => 'a';
+    const b = async () => 'b';
+    const result = withImpls(all, { webFetch: a, webSearch: b });
+    expect(result.find((t) => t.name === 'webFetch')!.execute).toBe(a);
+    expect(result.find((t) => t.name === 'webSearch')!.execute).toBe(b);
   });
 });
