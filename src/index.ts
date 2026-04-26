@@ -18,3 +18,9 @@ export {
   CodexBackend,
   type CodexBackendOptions,
 } from './backends/codex/index';
+export {
+  vercel,
+  VercelBackend,
+  type VercelBackendOptions,
+} from './backends/vercel/index';
+export { appendUIMessage, readUIMessages } from './persistence';
