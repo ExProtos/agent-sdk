@@ -15,8 +15,10 @@
  * - Coarse event translation: full items at `item/completed`. Streaming
  *   deltas (`item/agentMessage/delta`, `item/reasoning/textDelta`) are
  *   surfaced as text_delta / thinking_delta events
- * - Auth: caller has run `codex login` (or has OPENAI_API_KEY set);
- *   query() errors with a clear message if not logged in
+ * - Auth: pass `apiKey` (writes a wrapper-managed auth.json) and/or
+ *   `profile` (named slot under ~/.agent-sdk/codex/<cwdHash>/<profile>/).
+ *   Without either, Codex falls back to ambient ~/.codex/auth.json from
+ *   `codex login`; query() errors with a clear message if not logged in.
  */
 
 import { fileURLToPath } from 'node:url';
@@ -26,6 +28,8 @@ import type { Tool } from '../../tools/types';
 import * as builtin from '../../tools/builtin';
 import { CodexClient, CodexRpcError, type CodexClientOptions } from './client';
 import { McpBridge, type BridgeConfig } from './mcp-bridge';
+import { resolveProfileSlot } from './profileSlot';
+import { codexLogin, type LoginOptions, type LoginResult } from './login';
 import type {
   GetAccountResponse,
   ServerNotification,
@@ -42,7 +46,7 @@ import type {
  */
 export type CodexEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 
-export interface CodexBackendOptions extends CodexClientOptions {
+export interface CodexBackendOptions {
   tools?: Tool[];
   /** Override Codex's model selection. */
   model?: string;
@@ -54,6 +58,33 @@ export interface CodexBackendOptions extends CodexClientOptions {
   effort?: CodexEffort;
   /** Append to Codex's developer instructions (similar to systemPromptAppend). */
   developerInstructions?: string;
+  /**
+   * Profile name. Identifies a wrapper-managed `CODEX_HOME` slot under
+   * `~/.agent-sdk/codex/<cwdHash>/<profile>/`. Defaults to `'default'`
+   * when `apiKey` is set; unset on its own falls back to ambient
+   * `~/.codex/`. The profile owns session/history state — rotating the
+   * API key within the same profile preserves it.
+   */
+  profile?: string;
+  /**
+   * OpenAI API key. When set, the wrapper writes (or refreshes) an
+   * `auth.json` (`{auth_mode: "ApiKey", OPENAI_API_KEY: <key>}`) into
+   * the profile's `CODEX_HOME`. May be combined with `profile`; on its
+   * own, the slot defaults to `'default'`.
+   */
+  apiKey?: string;
+  /**
+   * Override the cwd used to derive the per-project profile slot AND
+   * the codex app-server subprocess's working directory. Defaults to
+   * `process.cwd()`. Pass an explicit value when constructing a Backend
+   * from a different working directory than where you ran `codex.login()`
+   * — same-cwd is required for the slots to match.
+   */
+  cwd?: string;
+  /** Override the codex binary. Defaults to `codex` on PATH. */
+  command?: string;
+  /** Override the codex subcommand args. Defaults to `['app-server']`. */
+  args?: string[];
 }
 
 const STALE_THREAD_RE = /thread.*not found|no such thread|thread.*does not exist/i;
@@ -61,7 +92,7 @@ const STALE_THREAD_RE = /thread.*not found|no such thread|thread.*does not exist
 class CodexAuthRequiredError extends Error {
   constructor() {
     super(
-      'codex is not logged in. Run `codex login` (for ChatGPT) or set OPENAI_API_KEY before using this backend.',
+      'codex is not logged in. Run `codex login` or set up a profile via `codex.login({ profile })` before using this backend.',
     );
     this.name = 'CodexAuthRequiredError';
   }
@@ -84,16 +115,30 @@ export class CodexBackend implements Backend {
   private bridgeConfig: BridgeConfig | null = null;
 
   constructor(options: CodexBackendOptions = {}) {
-    const { tools, model, effort, developerInstructions, ...client } = options;
-    this.clientOptions = client;
-    this.model = model;
-    this.effort = effort;
-    this.developerInstructions = developerInstructions;
+    const slot = resolveProfileSlot({
+      ...(options.apiKey !== undefined && { apiKey: options.apiKey }),
+      ...(options.profile !== undefined && { profile: options.profile }),
+      ...(options.cwd !== undefined && { cwd: options.cwd }),
+    });
+
+    const env = slot !== undefined ? { CODEX_HOME: slot.codexHome } : undefined;
+
+    const clientOptions: CodexClientOptions = {
+      ...(options.command !== undefined && { command: options.command }),
+      ...(options.args !== undefined && { args: options.args }),
+      ...(options.cwd !== undefined && { cwd: options.cwd }),
+      ...(env !== undefined && { env }),
+    };
+
+    this.clientOptions = clientOptions;
+    this.model = options.model;
+    this.effort = options.effort;
+    this.developerInstructions = options.developerInstructions;
 
     // Bridge-eligible: has execute() and no native.codex (Codex's built-in
     // tools always win when both are present, since they fire automatically
     // server-side without our involvement).
-    this.customTools = (tools ?? []).filter(
+    this.customTools = (options.tools ?? []).filter(
       (t) => typeof t.execute === 'function' && !t.native?.codex,
     );
   }
@@ -277,9 +322,17 @@ export class CodexBackend implements Backend {
   }
 }
 
-export function codex(options?: CodexBackendOptions): CodexBackend {
-  return new CodexBackend(options);
+export interface CodexFactory {
+  (options?: CodexBackendOptions): CodexBackend;
+  login(opts?: LoginOptions): Promise<LoginResult>;
 }
+
+export const codex: CodexFactory = Object.assign(
+  function codex(options?: CodexBackendOptions): CodexBackend {
+    return new CodexBackend(options);
+  },
+  { login: codexLogin },
+);
 
 // ── Event translation ──
 
