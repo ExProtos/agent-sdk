@@ -27,6 +27,13 @@ export interface CodexBackendOptions {
   /** Path to a CODEX_HOME directory. See Auth below. */
   codexHome?: string;
 
+  // Approval / sandbox policy. See "Approval and sandbox policy" below.
+  askForApproval?: 'never' | 'untrusted' | 'on-request';
+  sandboxMode?: 'read-only' | 'workspace-write' | 'danger-full-access';
+  onApprovalRequest?: (req: ApprovalRequest) => Promise<{
+    decision: 'accept' | 'decline';
+  }>;
+
   // Subprocess plumbing — defaults spawn `codex app-server` on PATH.
   command?: string;
   args?: string[];
@@ -325,13 +332,29 @@ Subsequent constructions reuse the file. Multiple Backend instances pointed at d
 
 The previous `env?: Record<string, string | undefined>` passthrough was removed. Non-auth env vars (proxies, debug flags) flow through ambient `process.env` because `codex app-server` reads it by default.
 
+## Approval and sandbox policy
+
+Three combinable typed fields on `CodexBackendOptions` configure when codex pauses to ask for permission and what its commands can do:
+
+- `askForApproval?: 'never' | 'untrusted' | 'on-request'` — forwarded as `approval_policy` in the `thread/start` config blob. Read each value as "ask for approval: <value>": `'never'` means "never ask" (commands run subject to `sandboxMode`; failures are returned to the model); `'on-request'` is codex's built-in default; `'untrusted'` auto-approves read-only safe commands and asks for the rest. The codex `'granular'` variant is intentionally omitted in v0 until the wire-format shape is verified.
+- `sandboxMode?: 'read-only' | 'workspace-write' | 'danger-full-access'` — forwarded as `sandbox_mode`. Codex's default is `'read-only'`. `'workspace-write'` allows writes inside the workspace with no network; `'danger-full-access'` is unrestricted (pair with an OS-level sandbox).
+- `onApprovalRequest?: (req) => Promise<{ decision: 'accept' | 'decline' }>` — async handler the client routes approval requests through. Covers `item/commandExecution/requestApproval`, `item/fileChange/requestApproval`, `applyPatchApproval`, and `execCommandApproval`. When unset, every request auto-declines (safe but means anything codex routes to the client fails silently). Handler exceptions also fall back to decline, with a stderr warning.
+
+The approval-handler dispatch is async and fire-and-forget: `handleLine` doesn't block on the handler. The default-decline path stays synchronous.
+
+`item/permissions/requestApproval` (the per-turn permissions blob) is *not* routed through `onApprovalRequest` — it has a different response shape (`{ permissions, scope }`) and stays on the conservative `{ permissions: {}, scope: 'turn' }` default for now. Surface a separate hook if someone needs it.
+
+Recommended unattended posture: `askForApproval: 'never'` plus `sandboxMode: 'workspace-write'` (or `'danger-full-access'` paired with an OS-level sandbox). With those two, codex runs commands without ever pausing, and `onApprovalRequest` is unreachable code (so its absence doesn't hurt).
+
 ## Auth verification (runtime)
 
 Before doing anything else, `query()` calls `account/read`. If `account` is null, the backend emits an `error` event carrying a `CodexAuthRequiredError` — a message that names the missing auth, points the user at `codex login`, and explains how to handle a custom `codexHome` — then ends the queue. This is the friendliest place to catch missing auth; letting it through to `thread/start` produces an opaque RPC error.
 
 ## What we don't do
 
-- **Approval flows.** Codex sends `item/commandExecution/requestApproval` etc. when in approval-required mode. The client decides them via `defaultServerRequestResponse` (decline by default) — there's no consumer-facing hook yet. Future work: surface as an `AgentEvent` variant (`approval_request`) the consumer can answer.
+- **`item/permissions/requestApproval` callback.** Has a different response shape than the action-approval methods; we still hardcode `{ permissions: {}, scope: 'turn' }`. Folding it into `onApprovalRequest` (or a sibling callback) is a follow-up if anyone hits it.
+- **Codex's `granular` approval variant.** Wire-format shape unverified; only `'never' | 'untrusted' | 'on-request'` ship today.
+- **Surfacing approval requests as `AgentEvent`s.** Currently the callback is a direct request/response pair, opaque to the event stream. If consumers want to display "the model wants to run X — approve?" UI without writing a handler, we'd need an event variant. Defer until needed.
 - **Non-text user input.** `image` and `localImage` UserInput variants are typed but not exposed in `QueryInput`. Adding them is straightforward; deferred until needed.
 - **Token usage.** Codex's protocol doesn't expose token counts in a stable place; `session_end.usage` is `zeroUsage()` everywhere. Mapping is on the backlog.
 - **Wiring user-supplied MCP servers.** Codex's TOML config supports arbitrary MCP servers; we only register our own bridge. Adding caller-controlled MCP server configs is a future option (see [architecture.md](../architecture.md) → Custom tools and the MCP bridge for the elicitation auto-accept caveat that becomes load-bearing if we do).

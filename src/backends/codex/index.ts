@@ -26,8 +26,16 @@ import * as path from 'node:path';
 import type { AgentEvent, AgentQuery, Attachment, Backend, QueryInput } from '../../types';
 import type { Tool } from '../../tools/types';
 import * as builtin from '../../tools/builtin';
-import { CodexClient, CodexRpcError, type CodexClientOptions } from './client';
+import {
+  CodexClient,
+  CodexRpcError,
+  type ApprovalRequest,
+  type ApprovalRequestHandler,
+  type CodexClientOptions,
+} from './client';
 import { McpBridge, type BridgeConfig } from './mcp-bridge';
+
+export type { ApprovalRequest, ApprovalRequestHandler };
 import type {
   GetAccountResponse,
   ServerNotification,
@@ -43,6 +51,36 @@ import type {
  * Source: `codex -c model_reasoning_effort=…` validates against this set.
  */
 export type CodexEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+
+/**
+ * Codex's approval policy. Mirrors the wire-format values codex's
+ * `AskForApproval` enum accepts (kebab-case). Read each value as
+ * "ask for approval: <value>":
+ *
+ * - `'never'` — never ask. Commands run subject to `sandboxMode`;
+ *   failures are returned to the model. Right choice for unattended
+ *   callers. Note: "never" means "never ask," not "never approve" —
+ *   actions still execute.
+ * - `'on-request'` — ask when the model decides to escalate. Codex's
+ *   built-in default.
+ * - `'untrusted'` — codex auto-approves read-only safe commands and
+ *   asks for everything else.
+ *
+ * The `'granular'` codex variant is intentionally omitted in v0;
+ * we'll add it once the wire-format shape is verified.
+ */
+export type AskForApproval = 'never' | 'untrusted' | 'on-request';
+
+/**
+ * Codex's filesystem-sandbox mode. Mirrors codex's `SandboxMode` enum
+ * on the wire (kebab-case).
+ *
+ * - `'read-only'` — codex's default; commands can read but not write.
+ * - `'workspace-write'` — write inside the workspace, no network.
+ * - `'danger-full-access'` — unrestricted. Pair with an OS-level sandbox
+ *   if the host isn't trusted.
+ */
+export type SandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access';
 
 export interface CodexBackendOptions {
   tools?: Tool[];
@@ -69,6 +107,39 @@ export interface CodexBackendOptions {
    * subsequent constructions reuse the file.
    */
   codexHome?: string;
+  /**
+   * When (if ever) codex pauses to ask the client for approval before
+   * running a command, changing a file, or applying a patch. Forwarded
+   * to codex as the `approval_policy` config override on `thread/start`.
+   *
+   * Pair with `onApprovalRequest` if you set anything other than
+   * `'never'` and want commands to actually execute — without a handler,
+   * the client auto-declines each request.
+   *
+   * If unset, codex falls back to its TOML config or built-in default
+   * (currently `'on-request'`).
+   */
+  askForApproval?: AskForApproval;
+  /**
+   * Codex's filesystem sandbox. Forwarded as the `sandbox_mode` config
+   * override on `thread/start`. If unset, codex falls back to its TOML
+   * config or built-in default (currently `'read-only'`).
+   */
+  sandboxMode?: SandboxMode;
+  /**
+   * Async handler for codex's per-action approval requests. When set,
+   * the client routes `item/commandExecution/requestApproval`,
+   * `item/fileChange/requestApproval`, `applyPatchApproval`, and
+   * `execCommandApproval` through this callback instead of the default
+   * auto-decline. Return `{ decision: 'accept' }` to let the action
+   * proceed, `{ decision: 'decline' }` to refuse.
+   *
+   * Without a handler, every approval request auto-declines — safe but
+   * means anything codex routes to the client fails silently. Set
+   * `askForApproval: 'never'` for unattended callers that don't need
+   * approval at all.
+   */
+  onApprovalRequest?: ApprovalRequestHandler;
   /** Override the codex binary. Defaults to `codex` on PATH. */
   command?: string;
   /** Override the codex subcommand args. Defaults to `['app-server']`. */
@@ -95,6 +166,8 @@ export class CodexBackend implements Backend {
   private readonly model: string | undefined;
   private readonly effort: CodexEffort | undefined;
   private readonly developerInstructions: string | undefined;
+  private readonly askForApproval: AskForApproval | undefined;
+  private readonly sandboxMode: SandboxMode | undefined;
   /**
    * Tools that will be routed through the MCP bridge — i.e. those with an
    * `execute()` and no `native.codex` mapping. Exposed for introspection.
@@ -113,12 +186,17 @@ export class CodexBackend implements Backend {
       ...(options.args !== undefined && { args: options.args }),
       ...(options.cwd !== undefined && { cwd: options.cwd }),
       ...(env !== undefined && { env }),
+      ...(options.onApprovalRequest !== undefined && {
+        onApprovalRequest: options.onApprovalRequest,
+      }),
     };
 
     this.clientOptions = clientOptions;
     this.model = options.model;
     this.effort = options.effort;
     this.developerInstructions = options.developerInstructions;
+    this.askForApproval = options.askForApproval;
+    this.sandboxMode = options.sandboxMode;
 
     // Bridge-eligible: has execute() and no native.codex (Codex's built-in
     // tools always win when both are present, since they fire automatically
@@ -190,7 +268,12 @@ export class CodexBackend implements Backend {
           translateNotification(notif, activeThreadId, queue),
         );
 
-        const codexConfig = buildCodexConfig(bridgeConfig, this.effort);
+        const codexConfig = buildCodexConfig(
+          bridgeConfig,
+          this.effort,
+          this.askForApproval,
+          this.sandboxMode,
+        );
 
         // Start or resume thread.
         if (input.continuation) {
@@ -587,9 +670,11 @@ function shimSpawn(): { command: string; args: string[] } {
  * the caller set `effort`). Returns null when there's nothing to override
  * — so thread/start sends no `config` field at all.
  */
-function buildCodexConfig(
+export function buildCodexConfig(
   bridge: BridgeConfig | null,
   effort: CodexEffort | undefined,
+  askForApproval: AskForApproval | undefined,
+  sandboxMode: SandboxMode | undefined,
 ): Record<string, unknown> | null {
   const config: Record<string, unknown> = {};
   if (bridge) {
@@ -606,6 +691,8 @@ function buildCodexConfig(
     };
   }
   if (effort !== undefined) config.model_reasoning_effort = effort;
+  if (askForApproval !== undefined) config.approval_policy = askForApproval;
+  if (sandboxMode !== undefined) config.sandbox_mode = sandboxMode;
   return Object.keys(config).length > 0 ? config : null;
 }
 

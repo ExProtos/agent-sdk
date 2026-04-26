@@ -45,6 +45,39 @@ function isResponse(msg: unknown): msg is RpcResponse {
 }
 
 /**
+ * Codex protocol methods that ask the client for an `accept`/`decline`
+ * decision before letting the model run a shell command, change a file,
+ * or apply a patch. When the caller supplies an `onApprovalRequest`
+ * handler, these are routed there; otherwise they default to `decline`.
+ */
+const APPROVAL_DECISION_METHODS = new Set([
+  'item/commandExecution/requestApproval',
+  'item/fileChange/requestApproval',
+  'applyPatchApproval',
+  'execCommandApproval',
+]);
+
+/**
+ * The shape passed to a caller-supplied `onApprovalRequest` handler.
+ * `params` is codex's raw params blob — the shape varies by `method`
+ * and tracks codex's protocol; consult the codex source for current
+ * fields. Handlers typically just inspect `method` and return a
+ * decision, deferring the parameter introspection until they need it.
+ */
+export interface ApprovalRequest {
+  method:
+    | 'item/commandExecution/requestApproval'
+    | 'item/fileChange/requestApproval'
+    | 'applyPatchApproval'
+    | 'execCommandApproval';
+  params: unknown;
+}
+
+export type ApprovalRequestHandler = (
+  req: ApprovalRequest,
+) => Promise<{ decision: 'accept' | 'decline' }>;
+
+/**
  * Default response shapes for server-initiated requests. Codex's protocol
  * has many request methods that expect typed responses (not just `{}`);
  * sending the wrong shape results in "missing field X" deserialization
@@ -122,6 +155,14 @@ export interface CodexClientOptions {
   args?: string[];
   env?: Record<string, string | undefined>;
   cwd?: string;
+  /**
+   * Async handler for codex's per-action approval requests (run a command,
+   * change a file, apply a patch, …). When unset, the client auto-declines
+   * each request — safe but means anything codex routes to the client
+   * fails silently. Set this when running with `askForApproval` other
+   * than `'never'` and you want commands to actually execute.
+   */
+  onApprovalRequest?: ApprovalRequestHandler;
 }
 
 export class CodexClient {
@@ -129,6 +170,7 @@ export class CodexClient {
   private readonly lines: ReadlineInterface;
   private readonly pending = new Map<number, PendingRequest>();
   private readonly notificationHandlers = new Set<NotificationHandler>();
+  private readonly approvalHandler: ApprovalRequestHandler | undefined;
   private nextId = 1;
   private closed = false;
   private initialized = false;
@@ -137,6 +179,7 @@ export class CodexClient {
     const command = options.command ?? 'codex';
     const args = options.args ?? ['app-server'];
     const env = { ...process.env, ...options.env };
+    this.approvalHandler = options.onApprovalRequest;
 
     this.child = spawn(command, args, {
       env,
@@ -246,10 +289,35 @@ export class CodexClient {
     if ('method' in msg) {
       if ('id' in msg && (msg as RpcRequest).id !== undefined) {
         const req = msg as RpcRequest;
+        if (this.approvalHandler !== undefined && APPROVAL_DECISION_METHODS.has(req.method)) {
+          // Async dispatch — handler may take arbitrary time. We must not
+          // block handleLine, so fire-and-forget the await and write the
+          // result when it resolves. If the handler throws, fall back to
+          // the conservative default so the conversation doesn't stall.
+          void this.dispatchApproval(req);
+          return;
+        }
         this.write({ id: req.id, result: defaultServerRequestResponse(req.method) });
         return;
       }
       this.dispatchNotification(msg as RpcNotification);
+    }
+  }
+
+  private async dispatchApproval(req: RpcRequest): Promise<void> {
+    try {
+      const decision = await this.approvalHandler!({
+        method: req.method as ApprovalRequest['method'],
+        params: req.params,
+      });
+      this.write({ id: req.id, result: decision });
+    } catch (err) {
+      process.stderr.write(
+        `[codex] onApprovalRequest threw for ${req.method}; falling back to decline. ${
+          err instanceof Error ? err.message : String(err)
+        }\n`,
+      );
+      this.write({ id: req.id, result: defaultServerRequestResponse(req.method) });
     }
   }
 

@@ -3,6 +3,7 @@ import {
   CodexBackend,
   EventQueue,
   attachmentToCodexInput,
+  buildCodexConfig,
   codex,
   translateItem,
   translateNotification,
@@ -828,6 +829,65 @@ describe('CodexBackend', () => {
 
     it('accepts no codexHome (falls back to ambient ~/.codex/)', () => {
       expect(() => codex({})).not.toThrow();
+    });
+  });
+
+  describe('approval/sandbox policy', () => {
+    it('accepts askForApproval', () => {
+      expect(() => codex({ askForApproval: 'never' })).not.toThrow();
+      expect(() => codex({ askForApproval: 'untrusted' })).not.toThrow();
+      expect(() => codex({ askForApproval: 'on-request' })).not.toThrow();
+    });
+
+    it('accepts sandboxMode', () => {
+      expect(() => codex({ sandboxMode: 'read-only' })).not.toThrow();
+      expect(() => codex({ sandboxMode: 'workspace-write' })).not.toThrow();
+      expect(() => codex({ sandboxMode: 'danger-full-access' })).not.toThrow();
+    });
+
+    it('accepts onApprovalRequest handler', () => {
+      const handler = async () => ({ decision: 'accept' as const });
+      expect(() => codex({ onApprovalRequest: handler })).not.toThrow();
+    });
+
+    it('accepts the unattended trio together', () => {
+      expect(() =>
+        codex({
+          askForApproval: 'never',
+          sandboxMode: 'workspace-write',
+          onApprovalRequest: async () => ({ decision: 'decline' }),
+        }),
+      ).not.toThrow();
+    });
+  });
+});
+
+describe('buildCodexConfig', () => {
+  it('returns null when nothing is set', () => {
+    expect(buildCodexConfig(null, undefined, undefined, undefined)).toBeNull();
+  });
+
+  it('emits approval_policy with the kebab-case wire value', () => {
+    expect(buildCodexConfig(null, undefined, 'never', undefined)).toEqual({
+      approval_policy: 'never',
+    });
+    expect(buildCodexConfig(null, undefined, 'on-request', undefined)).toEqual({
+      approval_policy: 'on-request',
+    });
+  });
+
+  it('emits sandbox_mode with the kebab-case wire value', () => {
+    expect(buildCodexConfig(null, undefined, undefined, 'workspace-write')).toEqual({
+      sandbox_mode: 'workspace-write',
+    });
+  });
+
+  it('combines effort, approval_policy, and sandbox_mode', () => {
+    const cfg = buildCodexConfig(null, 'high', 'never', 'workspace-write');
+    expect(cfg).toEqual({
+      model_reasoning_effort: 'high',
+      approval_policy: 'never',
+      sandbox_mode: 'workspace-write',
     });
   });
 });
