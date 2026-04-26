@@ -101,9 +101,16 @@ export class VercelBackend implements Backend {
     'instructions' | 'stopWhen' | 'maxOutputTokens' | 'temperature' | 'topP' | 'topK'
   >;
   private readonly sessionsDir: string;
+  private readonly hasTodoTool: boolean;
   // L1 cache: continuation token → ModelMessage[]. Populated on first query
   // and on cache-miss reloads from disk.
   private readonly histories = new Map<string, ModelMessage[]>();
+  // Per-continuation `todo` tool state. The most recent tool input (either
+  // the structured Claude shape or freeform Codex shape) is stored as-is
+  // and re-injected into the system prompt before each step via prepareStep.
+  // Lifetime is the backend instance — todos do NOT survive process restart
+  // (unlike conversation history, which round-trips via JSONL).
+  private readonly todosByContinuation = new Map<string, unknown>();
 
   constructor(options: VercelBackendOptions) {
     this.model = options.model;
@@ -111,6 +118,7 @@ export class VercelBackend implements Backend {
       options.sessionsDir ?? path.join(process.cwd(), '.agent-sdk', 'sessions');
 
     const parentTools = options.tools ?? [];
+    this.hasTodoTool = parentTools.some((t) => t.name === 'todo');
     const set: ToolSet = {};
     for (const t of parentTools) {
       if (t.name === 'task') {
@@ -127,6 +135,25 @@ export class VercelBackend implements Backend {
           inputSchema: t.schema,
           execute: async (input: unknown) =>
             runSubAgent(input, model, subagentToolsFor, callOptions()),
+        });
+        continue;
+      }
+      if (t.name === 'todo') {
+        // The todo tool is also contextual — its execute updates a per-
+        // continuation map, and prepareStep re-injects the latest todos
+        // into the system prompt for every subsequent step. Reads the
+        // continuation from experimental_context.
+        const todos = this.todosByContinuation;
+        set[t.name] = vercelTool({
+          description: t.description,
+          inputSchema: t.schema,
+          execute: async (input: unknown, opts) => {
+            const ctx = opts.experimental_context as { continuation?: string } | undefined;
+            if (ctx?.continuation !== undefined) {
+              todos.set(ctx.continuation, input);
+            }
+            return 'todos updated';
+          },
         });
         continue;
       }
@@ -169,6 +196,8 @@ export class VercelBackend implements Backend {
     const tools = this.toolSet;
     const callOptions = this.callOptions;
     const histories = this.histories;
+    const todosByContinuation = this.todosByContinuation;
+    const hasTodoTool = this.hasTodoTool;
     const systemAppend = input.systemPromptAppend;
     const persistPath = filePath;
     const initialMessage = input.message;
@@ -221,14 +250,14 @@ export class VercelBackend implements Backend {
             });
           }
 
-          const system = combineSystem(callOptions.instructions, systemAppend);
+          const baseSystem = combineSystem(callOptions.instructions, systemAppend);
 
           const result = streamText({
             model,
             tools,
             messages: history,
             abortSignal: abortController.signal,
-            ...(system !== undefined && { system }),
+            ...(baseSystem !== undefined && { system: baseSystem }),
             ...(callOptions.stopWhen !== undefined && { stopWhen: callOptions.stopWhen }),
             ...(callOptions.maxOutputTokens !== undefined && {
               maxOutputTokens: callOptions.maxOutputTokens,
@@ -236,6 +265,23 @@ export class VercelBackend implements Backend {
             ...(callOptions.temperature !== undefined && { temperature: callOptions.temperature }),
             ...(callOptions.topP !== undefined && { topP: callOptions.topP }),
             ...(callOptions.topK !== undefined && { topK: callOptions.topK }),
+            // The todo tool needs a per-continuation channel for both
+            // writes (the tool's execute) and reads (prepareStep injecting
+            // the latest todos into the system prompt). experimental_context
+            // is the AI SDK's escape hatch for per-call data.
+            experimental_context: { continuation },
+            ...(hasTodoTool && {
+              prepareStep: ({ experimental_context }) => {
+                const ctx = experimental_context as { continuation?: string } | undefined;
+                if (ctx?.continuation === undefined) return {};
+                const todos = todosByContinuation.get(ctx.continuation);
+                if (todos === undefined) return {};
+                const formatted = formatTodos(todos);
+                if (formatted === '') return {};
+                const combined = combineSystem(baseSystem, `Current todos:\n${formatted}`);
+                return combined !== undefined ? { system: combined } : {};
+              },
+            }),
           });
 
           // Persistence runs concurrently with fullStream consumption — both
@@ -397,6 +443,34 @@ export async function runSubAgent(
 }
 
 // ── Helpers ──
+
+/**
+ * Render the most recent `todo` tool input into a human-readable string
+ * for system-prompt injection. Handles both shapes the canonical `todo`
+ * tool accepts:
+ *   - `{ todos: [{ content, status, activeForm }, …] }` (Claude shape)
+ *   - `{ text: string }` (Codex freeform shape)
+ *
+ * Returns the empty string for unrecognized shapes — caller treats that
+ * as "nothing to inject."
+ */
+export function formatTodos(input: unknown): string {
+  if (typeof input !== 'object' || input === null) return '';
+  const i = input as { text?: unknown; todos?: unknown };
+  if (typeof i.text === 'string') return i.text;
+  if (Array.isArray(i.todos)) {
+    return i.todos
+      .map((t) => {
+        const item = t as { content?: unknown; status?: unknown };
+        const box =
+          item.status === 'completed' ? '[x]' : item.status === 'in_progress' ? '[~]' : '[ ]';
+        const content = typeof item.content === 'string' ? item.content : String(item.content);
+        return `${box} ${content}`;
+      })
+      .join('\n');
+  }
+  return '';
+}
 
 function combineSystem(base: string | undefined, append: string | undefined): string | undefined {
   if (base === undefined && append === undefined) return undefined;

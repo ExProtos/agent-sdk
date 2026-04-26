@@ -6,7 +6,13 @@ import { z } from 'zod';
 import type { TextStreamPart, ToolSet } from 'ai';
 import { MockLanguageModelV3, convertArrayToReadableStream } from 'ai/test';
 
-import { VercelBackend, runSubAgent, translatePart, vercel } from '../../../src/backends/vercel/index';
+import {
+  VercelBackend,
+  formatTodos,
+  runSubAgent,
+  translatePart,
+  vercel,
+} from '../../../src/backends/vercel/index';
 import { readUIMessages } from '../../../src/persistence';
 import * as builtin from '../../../src/tools/builtin';
 import type { AgentEvent } from '../../../src/types';
@@ -475,5 +481,61 @@ describe('VercelBackend task tool wiring', () => {
     // until task is invoked at runtime. Just verify backend constructs.
     expect(backend.name).toBe('vercel');
     expect(calls).toEqual([]);
+  });
+});
+
+// ── formatTodos ──
+
+describe('formatTodos', () => {
+  it('renders Claude-shape todos as a status checklist', () => {
+    expect(
+      formatTodos({
+        todos: [
+          { content: 'first', status: 'completed', activeForm: 'firsting' },
+          { content: 'second', status: 'in_progress', activeForm: 'seconding' },
+          { content: 'third', status: 'pending', activeForm: 'thirding' },
+        ],
+      }),
+    ).toBe('[x] first\n[~] second\n[ ] third');
+  });
+
+  it('returns Codex freeform text verbatim', () => {
+    expect(formatTodos({ text: 'plan: do A, then B' })).toBe('plan: do A, then B');
+  });
+
+  it('returns empty string for unrecognized shapes', () => {
+    expect(formatTodos({})).toBe('');
+    expect(formatTodos(null)).toBe('');
+    expect(formatTodos('raw string')).toBe('');
+    expect(formatTodos(42)).toBe('');
+  });
+
+  it('coerces non-string content via String()', () => {
+    expect(formatTodos({ todos: [{ content: 123, status: 'pending' }] })).toBe('[ ] 123');
+  });
+});
+
+// ── todo tool wiring ──
+
+describe('VercelBackend todo tool wiring', () => {
+  it('constructs without throwing when todo is in the toolset', () => {
+    const backend = vercel({
+      model: echoModel(),
+      sessionsDir: freshSessionsDir(),
+      tools: [builtin.todo, builtin.bash],
+    });
+    expect(backend.name).toBe('vercel');
+  });
+
+  it('runs an empty turn cleanly with todo wired in but uncalled', async () => {
+    const backend = vercel({
+      model: echoModel(),
+      sessionsDir: freshSessionsDir(),
+      tools: [builtin.todo],
+    });
+    const events = await drainEvents(backend, 'no todo work needed');
+    const types = events.map((e) => e.type);
+    expect(types[0]).toBe('session_start');
+    expect(types[types.length - 1]).toBe('session_end');
   });
 });
