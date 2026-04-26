@@ -270,4 +270,144 @@ describe('CodexClient', () => {
 
     await client.close();
   });
+
+  it('routes approval requests through onApprovalRequest when set', async () => {
+    // Fake server: after handshake, sends a server-initiated
+    // commandExecution/requestApproval, then echoes back the result it
+    // got via a sawApproval notification so the test can observe it.
+    const opts = fakeServerOptions(`
+      let approvalReply = null;
+      function onMessage(msg) {
+        if (msg.method === 'initialize' && typeof msg.id !== 'undefined') {
+          send({ id: msg.id, result: { serverInfo: { name: 'fake' } } });
+          // Send the approval request after the handshake completes.
+          setTimeout(() => {
+            send({
+              id: 99,
+              method: 'item/commandExecution/requestApproval',
+              params: { command: ['rm', '-rf', '/tmp/test'] },
+            });
+          }, 10);
+          return;
+        }
+        // The client's response to our approval request comes back as
+        // a JSON-RPC response (not a method call) — id matches the 99
+        // we sent.
+        if (msg.id === 99 && msg.result !== undefined) {
+          send({ method: 'sawApproval', params: { result: msg.result } });
+        }
+      }
+    `);
+
+    const calls: Array<{ method: string; params: unknown }> = [];
+    const client = await CodexClient.start({
+      ...opts,
+      onApprovalRequest: async (req) => {
+        calls.push({ method: req.method, params: req.params });
+        return { decision: 'accept' };
+      },
+    });
+
+    const sawApproval: { result: { decision: string } }[] = [];
+    client.onNotification((n) => {
+      if (n.method === 'sawApproval') {
+        sawApproval.push(n.params as { result: { decision: string } });
+      }
+    });
+
+    await new Promise((r) => setTimeout(r, 100));
+
+    expect(calls.length).toBe(1);
+    expect(calls[0].method).toBe('item/commandExecution/requestApproval');
+    expect(calls[0].params).toEqual({ command: ['rm', '-rf', '/tmp/test'] });
+    expect(sawApproval.length).toBe(1);
+    expect(sawApproval[0].result).toEqual({ decision: 'accept' });
+
+    await client.close();
+  });
+
+  it('falls back to default decline when onApprovalRequest is not set', async () => {
+    const opts = fakeServerOptions(`
+      function onMessage(msg) {
+        if (msg.method === 'initialize' && typeof msg.id !== 'undefined') {
+          send({ id: msg.id, result: { serverInfo: { name: 'fake' } } });
+          setTimeout(() => {
+            send({
+              id: 88,
+              method: 'item/commandExecution/requestApproval',
+              params: { command: ['ls'] },
+            });
+          }, 10);
+          return;
+        }
+        if (msg.id === 88 && msg.result !== undefined) {
+          send({ method: 'sawApproval', params: { result: msg.result } });
+        }
+      }
+    `);
+
+    const client = await CodexClient.start(opts);
+    const sawApproval: { result: { decision: string } }[] = [];
+    client.onNotification((n) => {
+      if (n.method === 'sawApproval') {
+        sawApproval.push(n.params as { result: { decision: string } });
+      }
+    });
+
+    await new Promise((r) => setTimeout(r, 100));
+
+    expect(sawApproval.length).toBe(1);
+    expect(sawApproval[0].result).toEqual({ decision: 'decline' });
+
+    await client.close();
+  });
+
+  it('falls back to decline when onApprovalRequest throws', async () => {
+    const opts = fakeServerOptions(`
+      function onMessage(msg) {
+        if (msg.method === 'initialize' && typeof msg.id !== 'undefined') {
+          send({ id: msg.id, result: { serverInfo: { name: 'fake' } } });
+          setTimeout(() => {
+            send({
+              id: 77,
+              method: 'item/commandExecution/requestApproval',
+              params: {},
+            });
+          }, 10);
+          return;
+        }
+        if (msg.id === 77 && msg.result !== undefined) {
+          send({ method: 'sawApproval', params: { result: msg.result } });
+        }
+      }
+    `);
+
+    // Suppress stderr so the "handler threw" warning doesn't pollute output.
+    const origWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = (() => true) as typeof process.stderr.write;
+
+    try {
+      const client = await CodexClient.start({
+        ...opts,
+        onApprovalRequest: async () => {
+          throw new Error('handler boom');
+        },
+      });
+      const sawApproval: { result: { decision: string } }[] = [];
+      client.onNotification((n) => {
+        if (n.method === 'sawApproval') {
+          sawApproval.push(n.params as { result: { decision: string } });
+        }
+      });
+
+      await new Promise((r) => setTimeout(r, 100));
+
+      expect(sawApproval.length).toBe(1);
+      expect(sawApproval[0].result).toEqual({ decision: 'decline' });
+
+      await client.close();
+    } finally {
+      process.stderr.write = origWrite;
+    }
+  });
 });
