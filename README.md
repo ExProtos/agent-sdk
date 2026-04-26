@@ -108,6 +108,20 @@ codex({});  // ambient ~/.codex/
 
 Subscription OAuth is licensed for personal use; for multi-user products, use the API keys.
 
+## Codex: approval and sandbox policy
+
+Codex's defaults (`approval_policy: 'on-request'`, `sandbox_mode: 'read-only'`) prompt the client for permission and forbid writes — fine for interactive use, wrong for unattended callers. Three typed fields configure this:
+
+```typescript
+codex({
+  askForApproval: 'never',          // never ask — commands run subject to sandboxMode
+  sandboxMode: 'workspace-write',   // 'read-only' | 'workspace-write' | 'danger-full-access'
+  onApprovalRequest: async (req) => ({ decision: 'accept' }),  // optional callback
+});
+```
+
+Without `onApprovalRequest`, the client auto-declines any approval codex routes to it. Pair `askForApproval: 'never'` with the right `sandboxMode` for unattended use.
+
 ## Built-in tools
 
 Pre-built `Tool` definitions that map to each backend's native equivalent:
