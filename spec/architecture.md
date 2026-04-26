@@ -362,7 +362,7 @@ The Codex backend explicitly verifies auth on each `query()` by calling `account
 - ✅ Claude Agent SDK backend — native tools + custom tools via SDK in-process MCP; `*_end`-only events
 - ✅ Codex AppServer backend — native tools + custom tools via subprocess MCP bridge; streaming deltas; native browsing → canonical `webSearch`/`webFetch` events
 - ✅ Vercel AI SDK backend — provider-agnostic model selection (incl. local via openai-compatible); JSONL persistence (UIMessage) with auto-reload; sub-agent (`task`) and todo state (with `prepareStep` injection) implemented in-backend
-- 🚧 OpenAI Agents SDK backend — see [docs/openai-agents.md](../docs/openai-agents.md). Separate from Codex; adds OpenAI's hosted tools (Code Interpreter, Computer Use, file_search) and built-in tracing for API-key users.
+- 🚧 OpenAI Agents SDK backend — see [backends/openai-agents.md](backends/openai-agents.md). Separate from Codex; adds OpenAI's hosted tools (Code Interpreter, Computer Use, file_search) and built-in tracing for API-key users. JSONL persistence via SDK's `Session` interface.
 
 Open follow-ups (see `docs/todo.md`):
 - Codex tool disabling via TOML config passthrough
