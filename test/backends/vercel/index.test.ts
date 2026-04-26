@@ -9,12 +9,16 @@ import { MockLanguageModelV3, convertArrayToReadableStream } from 'ai/test';
 import {
   VercelBackend,
   buildInitialUserContent,
+  compactHistory,
+  findCompactionSplitIndex,
   findLatestTodoInput,
   formatTodos,
   runSubAgent,
+  sliceTrailingTurns,
   translatePart,
   vercel,
 } from '../../../src/backends/vercel/index';
+import type { ModelMessage } from 'ai';
 import type { UIMessage } from 'ai';
 import { readUIMessages } from '../../../src/persistence';
 import * as builtin from '../../../src/tools/builtin';
@@ -811,5 +815,206 @@ describe('buildInitialUserContent', () => {
       { type: 'image', image: bytes.toString('base64'), mediaType: 'image/png' },
     ]);
     expect(out.uiParts).toEqual([{ type: 'file', mediaType: 'image/png', url: expectedDataUrl }]);
+  });
+});
+
+// ── Auto-compaction ──
+
+describe('findCompactionSplitIndex', () => {
+  it('returns 0 when there are fewer user messages than keepLastTurns', () => {
+    const h: ModelMessage[] = [
+      { role: 'user', content: 'a' },
+      { role: 'assistant', content: 'A' },
+      { role: 'user', content: 'b' },
+      { role: 'assistant', content: 'B' },
+    ];
+    expect(findCompactionSplitIndex(h, 4)).toBe(0);
+  });
+
+  it('returns the index of the Nth-most-recent user message', () => {
+    const h: ModelMessage[] = [
+      { role: 'user', content: 'u1' },
+      { role: 'assistant', content: 'a1' },
+      { role: 'user', content: 'u2' },
+      { role: 'assistant', content: 'a2' },
+      { role: 'user', content: 'u3' },
+      { role: 'assistant', content: 'a3' },
+      { role: 'user', content: 'u4' },
+      { role: 'assistant', content: 'a4' },
+    ];
+    // keep last 2 user-led turns → split at u3 (index 4)
+    expect(findCompactionSplitIndex(h, 2)).toBe(4);
+    // keep last 1 → split at u4 (index 6)
+    expect(findCompactionSplitIndex(h, 1)).toBe(6);
+  });
+
+  it('keeps tool messages bound to their preceding assistant (split lands on user)', () => {
+    const h: ModelMessage[] = [
+      { role: 'user', content: 'first' },
+      { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 't1', toolName: 'bash', input: {} }] as any },
+      { role: 'tool', content: [{ type: 'tool-result', toolCallId: 't1', toolName: 'bash', output: 'x' }] as any },
+      { role: 'assistant', content: 'after the tool' },
+      { role: 'user', content: 'second' },
+      { role: 'assistant', content: 'reply' },
+    ];
+    // keep last 1 user-led turn → split at the second user message (index 4),
+    // not in the middle of the tool-call/result pair
+    expect(findCompactionSplitIndex(h, 1)).toBe(4);
+  });
+});
+
+describe('sliceTrailingTurns', () => {
+  it('returns the slice from the Nth-most-recent user UIMessage onward', () => {
+    const messages: UIMessage[] = [
+      { id: '1', role: 'user', parts: [{ type: 'text', text: 'a' }] },
+      { id: '2', role: 'assistant', parts: [{ type: 'text', text: 'A' }] },
+      { id: '3', role: 'user', parts: [{ type: 'text', text: 'b' }] },
+      { id: '4', role: 'assistant', parts: [{ type: 'text', text: 'B' }] },
+      { id: '5', role: 'user', parts: [{ type: 'text', text: 'c' }] },
+      { id: '6', role: 'assistant', parts: [{ type: 'text', text: 'C' }] },
+    ];
+    expect(sliceTrailingTurns(messages, 2).map((m) => m.id)).toEqual(['3', '4', '5', '6']);
+    expect(sliceTrailingTurns(messages, 1).map((m) => m.id)).toEqual(['5', '6']);
+  });
+
+  it('returns the entire array when fewer user messages exist than requested', () => {
+    const messages: UIMessage[] = [
+      { id: '1', role: 'user', parts: [{ type: 'text', text: 'only' }] },
+    ];
+    expect(sliceTrailingTurns(messages, 4)).toEqual(messages);
+  });
+});
+
+describe('compactHistory', () => {
+  function summaryMockModel(summary: string) {
+    return new MockLanguageModelV3({
+      doGenerate: async () => ({
+        finishReason: { unified: 'stop', raw: 'stop' },
+        usage: { inputTokens: 100, outputTokens: 20, totalTokens: 120 },
+        content: [{ type: 'text', text: summary }],
+        warnings: [],
+      }),
+    });
+  }
+
+  it('returns undefined when history is too short to compact', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vercel-compact-'));
+    const persistPath = path.join(dir, 'session.jsonl');
+    const result = await compactHistory({
+      history: [
+        { role: 'user', content: 'hi' },
+        { role: 'assistant', content: 'hello' },
+      ],
+      todos: undefined,
+      model: summaryMockModel('summary text'),
+      keepLastTurns: 4,
+      persistPath,
+    });
+    expect(result).toBeUndefined();
+  });
+
+  it('returns undefined when no clean split point exists (not enough recent turns)', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vercel-compact-'));
+    const persistPath = path.join(dir, 'session.jsonl');
+    // 12 messages but only 1 user — keepLastTurns=4 wants 4 user-led turns,
+    // can't find them → no split.
+    const history: ModelMessage[] = [{ role: 'user', content: 'q' }];
+    for (let i = 0; i < 11; i++) history.push({ role: 'assistant', content: `chunk ${i}` });
+    const result = await compactHistory({
+      history,
+      todos: undefined,
+      model: summaryMockModel('s'),
+      keepLastTurns: 4,
+      persistPath,
+    });
+    expect(result).toBeUndefined();
+  });
+
+  it('rewrites history with a synthetic user summary + recent verbatim', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vercel-compact-'));
+    const persistPath = path.join(dir, 'session.jsonl');
+    // Seed JSONL with 6 messages — 3 user-led turns
+    const seed: UIMessage[] = [
+      { id: 'u1', role: 'user', parts: [{ type: 'text', text: 'first' }] },
+      { id: 'a1', role: 'assistant', parts: [{ type: 'text', text: 'reply 1' }] },
+      { id: 'u2', role: 'user', parts: [{ type: 'text', text: 'second' }] },
+      { id: 'a2', role: 'assistant', parts: [{ type: 'text', text: 'reply 2' }] },
+      { id: 'u3', role: 'user', parts: [{ type: 'text', text: 'third' }] },
+      { id: 'a3', role: 'assistant', parts: [{ type: 'text', text: 'reply 3' }] },
+    ];
+    fs.mkdirSync(path.dirname(persistPath), { recursive: true });
+    fs.writeFileSync(persistPath, seed.map((m) => JSON.stringify(m)).join('\n') + '\n');
+    // Pad to clear the MIN_HISTORY_FOR_COMPACTION threshold of 10
+    const history: ModelMessage[] = [];
+    for (let i = 0; i < 4; i++) {
+      history.push({ role: 'user', content: `older ${i}` });
+      history.push({ role: 'assistant', content: `older reply ${i}` });
+    }
+    history.push({ role: 'user', content: 'second' });
+    history.push({ role: 'assistant', content: 'reply 2' });
+    history.push({ role: 'user', content: 'third' });
+    history.push({ role: 'assistant', content: 'reply 3' });
+
+    const newHistory = await compactHistory({
+      history,
+      todos: undefined,
+      model: summaryMockModel('SUMMARY OF EARLIER'),
+      keepLastTurns: 2,
+      persistPath,
+    });
+    expect(newHistory).toBeDefined();
+    expect(newHistory![0]).toEqual({
+      role: 'user',
+      content: 'Earlier in this conversation:\nSUMMARY OF EARLIER',
+    });
+    // Last 2 user-led turns survive verbatim
+    expect(newHistory!.slice(1)).toEqual([
+      { role: 'user', content: 'second' },
+      { role: 'assistant', content: 'reply 2' },
+      { role: 'user', content: 'third' },
+      { role: 'assistant', content: 'reply 3' },
+    ]);
+
+    // JSONL on disk reflects the rewrite
+    const persisted = readUIMessages(persistPath);
+    expect(persisted[0]!.role).toBe('user');
+    expect((persisted[0]!.parts[0] as { text: string }).text).toContain('SUMMARY OF EARLIER');
+    // Trailing UIMessages match the seed's last 4 entries (u2/a2/u3/a3)
+    expect(persisted.slice(1).map((m) => m.id)).toEqual(['u2', 'a2', 'u3', 'a3']);
+  });
+
+  it('injects a synthetic tool-todo message after the summary when todos are present', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vercel-compact-'));
+    const persistPath = path.join(dir, 'session.jsonl');
+    // Need at least MIN_HISTORY_FOR_COMPACTION (10) messages — 6 user-led
+    // turns = 12 messages clears the threshold.
+    const seed: UIMessage[] = [];
+    for (let i = 0; i < 6; i++) {
+      seed.push({ id: `u${i}`, role: 'user', parts: [{ type: 'text', text: `q${i}` }] });
+      seed.push({ id: `a${i}`, role: 'assistant', parts: [{ type: 'text', text: `r${i}` }] });
+    }
+    fs.mkdirSync(path.dirname(persistPath), { recursive: true });
+    fs.writeFileSync(persistPath, seed.map((m) => JSON.stringify(m)).join('\n') + '\n');
+    const history: ModelMessage[] = [];
+    for (let i = 0; i < 6; i++) {
+      history.push({ role: 'user', content: `q${i}` });
+      history.push({ role: 'assistant', content: `r${i}` });
+    }
+
+    const todos = { todos: [{ content: 'survive compaction', status: 'in_progress', activeForm: 'surviving compaction' }] };
+    await compactHistory({
+      history,
+      todos,
+      model: summaryMockModel('SUMMARY'),
+      keepLastTurns: 2,
+      persistPath,
+    });
+    const persisted = readUIMessages(persistPath);
+    // First message: summary
+    expect(persisted[0]!.role).toBe('user');
+    // Second message: synthetic assistant with tool-todo part — survives
+    // the next reload's findLatestTodoInput walk
+    const recovered = findLatestTodoInput(persisted);
+    expect(recovered).toEqual(todos);
   });
 });

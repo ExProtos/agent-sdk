@@ -191,9 +191,39 @@ The continuation token is a UUID minted on first query (or on resume, the caller
 
 There's no `isContinuationInvalid` implementation — a missing JSONL is treated as "no prior history" rather than an invalidation signal. Callers that retain continuation tokens across long pauses (days/weeks) won't get a stale-session error from this backend.
 
+## Auto-compaction
+
+When `inputTokens / contextWindow >= contextThreshold` after a turn, the backend schedules compaction for the next turn. Before the next `streamText` call, `compactHistory` runs:
+
+1. **Find the split.** Walk backward through history to the Nth-most-recent user-role message (where N = `keepLastTurns`). Split there. This rule guarantees we never sever a tool-call/result pair, since those always live between an assistant message and the next user message.
+2. **Generate the summary.** `generateText` against `compactionModel` (defaults to the agent's model) with `COMPACTION_SYSTEM_PROMPT` and the older messages as input. Returns plain text — typically ~10% of the input length.
+3. **Build the new history.** `[{role: 'user', content: 'Earlier in this conversation:\n<summary>'}, …recent]`. If the continuation has todos, inject a synthetic assistant UIMessage with one `tool-todo` part right after the summary so `findLatestTodoInput` still recovers them on subsequent reload.
+4. **Atomic JSONL rewrite.** Serialize the new shape, write to `<persistPath>.tmp`, `renameSync` over the original. POSIX rename is atomic — no torn-write window.
+5. **Update the in-memory cache** with the rewritten history.
+
+### Knobs
+
+| Option | Default | Notes |
+|---|---|---|
+| `autoCompact` | `true` | Master switch. Off matches the no-overflow-handling baseline. |
+| `contextThreshold` | `0.8` | Fraction of context window. 0.8 leaves headroom for the next turn. |
+| `compactionModel` | same as `model` | Override to use a cheaper model for summarization. |
+| `keepLastTurns` | `4` | Recent user-led turns kept verbatim. Defines the "current context" window. |
+| `contextWindow` | resolved from `MODEL_CONTEXT_WINDOWS` table by `model.modelId` prefix | Required override for unknown models. Without it, autoCompact silently disables for that backend. |
+
+### Safeguards
+
+- Skip compaction if `history.length < MIN_HISTORY_FOR_COMPACTION` (10) — overhead exceeds the win.
+- Skip if no clean split point exists (history doesn't have `keepLastTurns` user messages).
+- Skip if the summarizer returns empty text (defensive).
+- On compaction failure, surface an `error` event but continue to the next turn — better to let the next streamText fail with its own error than to swallow.
+
+### Compacted messages are gone
+
+Compaction is destructive within agent-sdk's JSONL — the older messages are replaced by the summary. We don't keep a sidecar log; consumers that need an audit trail (e.g. Protos) maintain their own format independently.
+
 ## What we don't do
 
-- **No within-backend auto-compaction** when context fills up. Claude and Codex both auto-compact natively; Vercel currently surfaces the underlying provider's overflow error. See `docs/todo.md` → "Vercel backend auto-compaction".
 - **No multi-step `task` (Codex collaboration form).** The Claude one-shot form is implemented; Codex's spawn/sendInput/wait/resume/closeAgent multi-step protocol is not. A Vercel-routed model that wasn't trained on it likely won't drive it well anyway.
 - **No `webSearch` / `todo` / `task` defaults from `tools.implementations`.** All three are contextual or provider-dependent; callers wire them via `withImpls` (or rely on Vercel's special-casing for `task`/`todo`).
 - **No streaming UI helpers.** The AI SDK ships `result.toUIMessageStreamResponse()` etc. for HTTP/SSE delivery. We use those internally for persistence; we don't re-export them.

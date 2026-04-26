@@ -27,6 +27,7 @@ import { randomUUID } from 'node:crypto';
 import * as path from 'node:path';
 import {
   convertToModelMessages,
+  generateText,
   readUIMessageStream,
   stepCountIs,
   streamText,
@@ -42,6 +43,7 @@ import {
 } from 'ai';
 
 import * as fs from 'node:fs/promises';
+import { renameSync, writeFileSync } from 'node:fs';
 import type {
   AgentEvent,
   AgentQuery,
@@ -91,6 +93,40 @@ export interface VercelBackendOptions {
    * the `task` tool in the returned list — at your own risk.
    */
   subagentTools?: (subagent_type: string) => Tool[];
+
+  /**
+   * Auto-compact the conversation when input tokens approach the context
+   * window. Matches Claude/Codex backends, which auto-compact natively.
+   * Default `true`. Set `false` to disable; the underlying provider will
+   * then error on context overflow.
+   */
+  autoCompact?: boolean;
+  /**
+   * Fraction of the model's context window that triggers compaction.
+   * Default `0.8` (compact when `inputTokens / contextWindow >= 0.8`).
+   */
+  contextThreshold?: number;
+  /**
+   * Model used for the summarization call. Defaults to the same model as
+   * the agent. A cheaper model (e.g. `gpt-4o-mini`, `claude-haiku`) is a
+   * common override since summarization is a one-shot generation that
+   * doesn't need the agent's full capability.
+   */
+  compactionModel?: LanguageModel;
+  /**
+   * Number of recent user-led turns kept verbatim, never compacted. The
+   * summary covers all messages before the Nth-most-recent user message;
+   * everything from that user message onward flows through unchanged.
+   * Default `4`.
+   */
+  keepLastTurns?: number;
+  /**
+   * Override the model's context window in tokens. Required when the
+   * model's `modelId` isn't recognized by our hardcoded table — without
+   * either, autoCompact silently disables (the underlying provider will
+   * still error on overflow).
+   */
+  contextWindow?: number;
 }
 
 const ZERO_USAGE: TokenUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
@@ -100,6 +136,70 @@ const ZERO_USAGE: TokenUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 
 // continuing to a final answer. We default to stepCountIs(20) so the agent
 // loop actually runs to completion. Callers can override via VercelBackendOptions.
 const DEFAULT_STOP_WHEN: StopCondition<ToolSet> = stepCountIs(20);
+
+const DEFAULT_CONTEXT_THRESHOLD = 0.8;
+const DEFAULT_KEEP_LAST_TURNS = 4;
+// Don't compact if the conversation is too short to win anything — the
+// summarization call's overhead exceeds the saved tokens.
+const MIN_HISTORY_FOR_COMPACTION = 10;
+
+/**
+ * Hardcoded context-window sizes by model identifier prefix. Match is by
+ * `startsWith` so e.g. `claude-sonnet-4-5-20250929` resolves via the
+ * `claude-sonnet-` entry. Caller can override via `contextWindow` option
+ * for unknown models.
+ */
+const MODEL_CONTEXT_WINDOWS: ReadonlyArray<readonly [string, number]> = [
+  // Anthropic
+  ['claude-opus-4', 200_000],
+  ['claude-sonnet-4', 200_000],
+  ['claude-haiku-4', 200_000],
+  ['claude-3-7-sonnet', 200_000],
+  ['claude-3-5-sonnet', 200_000],
+  ['claude-3-5-haiku', 200_000],
+  ['claude-3-opus', 200_000],
+  ['claude-3-sonnet', 200_000],
+  ['claude-3-haiku', 200_000],
+  // OpenAI
+  ['gpt-5', 400_000],
+  ['gpt-4.1', 1_000_000],
+  ['gpt-4o', 128_000],
+  ['o3', 200_000],
+  ['o1', 200_000],
+  // Google
+  ['gemini-2.5', 1_000_000],
+  ['gemini-2.0', 1_000_000],
+  ['gemini-1.5-pro', 2_000_000],
+  ['gemini-1.5-flash', 1_000_000],
+];
+
+function resolveContextWindow(model: LanguageModel, override: number | undefined): number | undefined {
+  if (override !== undefined) return override;
+  const id = (model as { modelId?: string }).modelId;
+  if (typeof id !== 'string') return undefined;
+  for (const [prefix, size] of MODEL_CONTEXT_WINDOWS) {
+    if (id.startsWith(prefix)) return size;
+  }
+  return undefined;
+}
+
+const COMPACTION_SYSTEM_PROMPT = `You are summarizing the earlier portion of a conversation between a user and an AI assistant so it can be continued without exceeding the model's context window.
+
+Write a concise summary that preserves:
+- The user's overall goal and any specific requests
+- Key decisions made and their rationale
+- Files read, written, or modified (with paths)
+- Tool outputs that the assistant relied on for later reasoning
+- Open questions or unresolved issues
+- The current task and any in-progress work
+
+Drop:
+- Pleasantries, acknowledgements, and chit-chat
+- Verbose tool output already captured by the conclusions drawn from it
+- Redundant restatements of the same information
+- Reasoning that led to a discarded approach
+
+Output a plain-text summary in third person ("the user asked…", "the assistant ran…"). No headers or bullet markers — flowing prose. Aim for ~10% of the input length.`;
 
 export class VercelBackend implements Backend {
   readonly name = 'vercel';
@@ -123,6 +223,16 @@ export class VercelBackend implements Backend {
   // tool-todo part (see findLatestTodoInput) — the JSONL is the single
   // source of truth, no sidecar file.
   private readonly todosByContinuation = new Map<string, unknown>();
+  // Per-continuation flag: true if the next turn should compact the history
+  // before calling streamText. Set when a turn finishes with usage above
+  // the configured threshold; cleared after compaction runs.
+  private readonly compactionPending = new Set<string>();
+  // Auto-compaction config (resolved at construction).
+  private readonly autoCompact: boolean;
+  private readonly contextThreshold: number;
+  private readonly compactionModel: LanguageModel | undefined;
+  private readonly keepLastTurns: number;
+  private readonly contextWindow: number | undefined;
 
   constructor(options: VercelBackendOptions) {
     this.model = options.model;
@@ -147,6 +257,12 @@ export class VercelBackend implements Backend {
       ...(options.topP !== undefined && { topP: options.topP }),
       ...(options.topK !== undefined && { topK: options.topK }),
     };
+
+    this.autoCompact = options.autoCompact ?? true;
+    this.contextThreshold = options.contextThreshold ?? DEFAULT_CONTEXT_THRESHOLD;
+    this.compactionModel = options.compactionModel;
+    this.keepLastTurns = options.keepLastTurns ?? DEFAULT_KEEP_LAST_TURNS;
+    this.contextWindow = resolveContextWindow(this.model, options.contextWindow);
   }
 
   query(input: QueryInput): AgentQuery {
@@ -175,6 +291,12 @@ export class VercelBackend implements Backend {
     const persistPath = filePath;
     const initialMessage = input.message;
     const initialAttachments = input.attachments ?? [];
+    const autoCompact = this.autoCompact;
+    const contextThreshold = this.contextThreshold;
+    const compactionModel = this.compactionModel ?? this.model;
+    const keepLastTurns = this.keepLastTurns;
+    const contextWindow = this.contextWindow;
+    const compactionPending = this.compactionPending;
 
     async function* events(): AsyncGenerator<AgentEvent> {
       yield { type: 'session_start', continuation };
@@ -237,6 +359,32 @@ export class VercelBackend implements Backend {
               role: 'user',
               parts: [{ type: 'text', text: next }],
             });
+          }
+
+          // Compaction is scheduled BEFORE we call streamText so the new turn
+          // sees the rewritten history. The post-turn check below sets the
+          // flag; here we drain it.
+          if (autoCompact && compactionPending.has(continuation)) {
+            compactionPending.delete(continuation);
+            try {
+              const compacted = await compactHistory({
+                history,
+                todos: todosByContinuation.get(continuation),
+                model: compactionModel,
+                keepLastTurns,
+                persistPath,
+              });
+              if (compacted !== undefined) {
+                history = compacted;
+                histories.set(continuation, history);
+              }
+            } catch (err) {
+              // If compaction fails, log via an error event but continue —
+              // the next streamText will likely overflow, which produces its
+              // own error. Better to surface both than to swallow.
+              const msg = err instanceof Error ? err.message : String(err);
+              yield { type: 'error', message: `compaction failed: ${msg}`, retryable: false };
+            }
           }
 
           const baseSystem = combineSystem(callOptions.instructions, systemAppend);
@@ -309,6 +457,18 @@ export class VercelBackend implements Backend {
             history.push(...step.response.messages);
           }
           histories.set(continuation, history);
+
+          // Schedule compaction for the next turn if input usage crossed the
+          // threshold. The check needs both contextWindow (table or override)
+          // and a non-zero inputTokens (which streamText populates on finish).
+          if (
+            autoCompact
+            && contextWindow !== undefined
+            && lastUsage.input > 0
+            && lastUsage.input / contextWindow >= contextThreshold
+          ) {
+            compactionPending.add(continuation);
+          }
 
           yield { type: 'turn_end', reason: lastStopReason };
 
@@ -462,6 +622,143 @@ export async function runSubAgent(
   });
 
   return await result.text;
+}
+
+// ── Compaction ──
+
+/**
+ * Rewrite `history` so the older portion is replaced by a single summary
+ * message. Returns the rewritten history (and persists it atomically to
+ * `persistPath`), or undefined when compaction was skipped (e.g. history
+ * too short, no clean split point).
+ *
+ * Algorithm:
+ *   1. Find the Nth-most-recent user-role message; split right before it.
+ *      This guarantees we never sever a tool-call/result pair, since those
+ *      always live between an assistant message and the next user message.
+ *   2. Run a `generateText` against `model` with the COMPACTION_SYSTEM_PROMPT
+ *      and the older messages as input. Get back a plain-text summary.
+ *   3. Build the new history:
+ *        [synthetic user with summary]
+ *        + [synthetic assistant with tool-todo part if todos present]
+ *        + [recent verbatim]
+ *   4. Atomically rewrite the JSONL — write `<persistPath>.tmp` with the
+ *      new UIMessage shape, then `renameSync` over the original.
+ */
+export async function compactHistory(args: {
+  history: ModelMessage[];
+  todos: unknown;
+  model: LanguageModel;
+  keepLastTurns: number;
+  persistPath: string;
+}): Promise<ModelMessage[] | undefined> {
+  const { history, todos, model, keepLastTurns, persistPath } = args;
+
+  if (history.length < MIN_HISTORY_FOR_COMPACTION) return undefined;
+
+  const splitIdx = findCompactionSplitIndex(history, keepLastTurns);
+  if (splitIdx <= 0) return undefined; // No compaction win available
+
+  const older = history.slice(0, splitIdx);
+  const recent = history.slice(splitIdx);
+
+  const summaryResult = await generateText({
+    model,
+    system: COMPACTION_SYSTEM_PROMPT,
+    messages: older,
+  });
+  const summaryText = summaryResult.text.trim();
+  if (summaryText === '') return undefined; // Defensive — model returned nothing
+
+  // Build the new ModelMessage[] for the in-memory cache.
+  const summaryUser: ModelMessage = {
+    role: 'user',
+    content: `Earlier in this conversation:\n${summaryText}`,
+  };
+  const newHistory: ModelMessage[] = [summaryUser, ...recent];
+
+  // Build the new UIMessage[] for the JSONL rewrite. We mirror what we'd
+  // normally append: the summary as a user message with a single TextUIPart,
+  // optionally followed by a synthetic assistant tool-todo so reload still
+  // finds the latest todos via findLatestTodoInput.
+  const summaryUIMessage: UIMessage = {
+    id: randomUUID(),
+    role: 'user',
+    parts: [{ type: 'text', text: `Earlier in this conversation:\n${summaryText}` }],
+  };
+  const persisted: UIMessage[] = [summaryUIMessage];
+  if (todos !== undefined) {
+    persisted.push({
+      id: randomUUID(),
+      role: 'assistant',
+      parts: [
+        {
+          type: 'tool-todo',
+          toolCallId: randomUUID(),
+          state: 'output-available',
+          input: todos,
+          output: 'todos updated',
+        } as UIMessage['parts'][number],
+      ],
+    });
+  }
+  // Recent ModelMessages get serialized back to UIMessages via the inverse
+  // of convertToModelMessages. We don't have a public converter, so re-read
+  // the existing JSONL and keep only its tail (the messages corresponding
+  // to `recent`). This is exact because we know how many appended-since
+  // entries to keep — same count as `recent.length`'s message-shape.
+  const stored = readUIMessages(persistPath);
+  // The trailing UIMessage[] that maps to `recent` is the last
+  // `stored.length - olderUiCount` entries. We can't compute olderUiCount
+  // exactly from older.length (UIMessages and ModelMessages don't have a
+  // 1:1 ratio when tool calls are present), so use a heuristic: match
+  // tail messages by user-role boundary.
+  const recentUI = sliceTrailingTurns(stored, keepLastTurns);
+  for (const m of recentUI) persisted.push(m);
+
+  await rewriteJsonlAtomically(persistPath, persisted);
+  return newHistory;
+}
+
+/**
+ * Find the index in `history` where compaction should split — right before
+ * the Nth-most-recent user-role message. Returns 0 if no such split point
+ * exists (history too short to keep N user-led turns + still have something
+ * to summarize).
+ */
+export function findCompactionSplitIndex(history: ModelMessage[], keepLastTurns: number): number {
+  let userCount = 0;
+  for (let i = history.length - 1; i >= 0; i--) {
+    if (history[i]!.role === 'user') {
+      userCount++;
+      if (userCount === keepLastTurns) return i;
+    }
+  }
+  return 0;
+}
+
+/**
+ * Return the trailing UIMessages corresponding to the last `keepLastTurns`
+ * user-led turns. Used when persisting the compacted history — we keep
+ * the file's tail verbatim and replace everything before it with the
+ * synthetic summary message.
+ */
+export function sliceTrailingTurns(messages: UIMessage[], keepLastTurns: number): UIMessage[] {
+  let userCount = 0;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i]!.role === 'user') {
+      userCount++;
+      if (userCount === keepLastTurns) return messages.slice(i);
+    }
+  }
+  return [...messages];
+}
+
+async function rewriteJsonlAtomically(filePath: string, messages: UIMessage[]): Promise<void> {
+  const tmp = `${filePath}.tmp`;
+  const content = messages.map((m) => JSON.stringify(m)).join('\n') + (messages.length > 0 ? '\n' : '');
+  writeFileSync(tmp, content);
+  renameSync(tmp, filePath);
 }
 
 // ── Helpers ──

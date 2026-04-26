@@ -249,6 +249,7 @@ Per-tool details are in [tools.md](tools.md).
 | `push()` mid-turn | Supported (SDK has a streaming user-message iterator) | Not supported — `push` errors; caller should `end()` + `run()` with continuation | Supported via internal queue + chained `streamText` turns | Not supported — `push` errors; caller should `end()` + `run()` with continuation |
 | Subprocess | None | One `codex app-server` per backend instance, lazily spawned, killed on `close()` | None | None |
 | Persistence | SDK-native (`~/.claude/projects/`) | SDK-native (`~/.codex/sessions/` + sqlite index) | We own it (UIMessage[] JSONL — see Persistence below) | Memory-only by default; opt-in JSONL via `sessionsDir` (our `JsonlSession` impl, AgentInputItem[]); opt-in OpenAI Conversations |
+| Auto-compaction | SDK-native (Claude SDK summarizes when context fills) | AppServer-native (Codex auto-compacts on its own threshold) | In-backend — between turns, when `inputTokens / contextWindow >= contextThreshold`. Default on. Hardcoded model→context-window table; `contextWindow` override for unknown models. | Opt-in via `autoCompact: true` (wraps Session in `OpenAIResponsesCompactionSession`; not on by default since Conversations users hit OpenAI's own compaction) |
 
 Per-backend wire details are in [backends/claude.md](backends/claude.md), [backends/codex.md](backends/codex.md), [backends/vercel.md](backends/vercel.md), and [backends/openai-agents.md](backends/openai-agents.md).
 
@@ -366,8 +367,8 @@ The Codex backend explicitly verifies auth on each `query()` by calling `account
 
 Open follow-ups (see `docs/todo.md`):
 - Codex tool disabling via TOML config passthrough
-- Vercel within-backend auto-compaction (Claude/Codex parity)
 - Verify Codex's `item/completed` duplication behavior
+- Faster grep implementation (rg passthrough + streaming reads)
 
 The roadmap docs under `docs/` capture integration shape, what needs building, and open questions per planned backend. They live outside `spec/` because they're forward-looking design notes, not contracts the build must produce.
 
