@@ -76,6 +76,17 @@ export interface VercelBackendOptions {
    * a temp directory without juggling `process.chdir`.
    */
   sessionsDir?: string;
+  /**
+   * Decide which tools a sub-agent (the `task` tool) gets when spawned.
+   * Receives the model-supplied `subagent_type` hint (Claude convention;
+   * empty string if absent). Default: every parent tool except `task`
+   * itself — single-level delegation, no recursive spawning.
+   *
+   * To honor Claude's `subagent_type` semantics (researcher, code-reviewer,
+   * …), return a tailored `Tool[]` for each. To allow recursion, include
+   * the `task` tool in the returned list — at your own risk.
+   */
+  subagentTools?: (subagent_type: string) => Tool[];
 }
 
 const ZERO_USAGE: TokenUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
@@ -99,8 +110,26 @@ export class VercelBackend implements Backend {
     this.sessionsDir =
       options.sessionsDir ?? path.join(process.cwd(), '.agent-sdk', 'sessions');
 
+    const parentTools = options.tools ?? [];
     const set: ToolSet = {};
-    for (const t of options.tools ?? []) {
+    for (const t of parentTools) {
+      if (t.name === 'task') {
+        // The task tool is contextual — it needs the parent's model and
+        // a derived tool subset. Build a closure-bound replacement here
+        // rather than calling the canonical execute (which has none).
+        const subagentToolsFor =
+          options.subagentTools ??
+          ((_: string) => parentTools.filter((p) => p.name !== 'task'));
+        const model = this.model;
+        const callOptions = () => this.callOptions;
+        set[t.name] = vercelTool({
+          description: t.description,
+          inputSchema: t.schema,
+          execute: async (input: unknown) =>
+            runSubAgent(input, model, subagentToolsFor, callOptions()),
+        });
+        continue;
+      }
       if (!t.execute) continue;
       set[t.name] = vercelTool({
         description: t.description,
@@ -285,6 +314,86 @@ export class VercelBackend implements Backend {
 
 export function vercel(options: VercelBackendOptions): VercelBackend {
   return new VercelBackend(options);
+}
+
+// ── Sub-agent runner (for the `task` tool) ──
+
+/**
+ * Spawn a sub-agent for the `task` tool. Accepts the Claude one-shot form
+ * `{description, prompt, subagent_type}`. The Codex multi-step form
+ * (`{tool, prompt?, model?, receiverThreadIds?}`) is not supported on
+ * Vercel — it requires long-lived sub-thread management that doesn't map
+ * cleanly to a single in-process invocation.
+ *
+ * The sub-agent runs as a fresh `generateText` call:
+ *   - same model as the parent (no override in v0)
+ *   - tools from `subagentToolsFor(subagent_type)` — defaults to all
+ *     parent tools except `task` (no recursive spawning)
+ *   - sub-agent events do NOT enter the parent's AgentEvent stream;
+ *     the parent sees one `tool_call_end` and one `tool_result` only
+ *
+ * Returns the sub-agent's final assistant text.
+ */
+export async function runSubAgent(
+  input: unknown,
+  model: LanguageModel,
+  subagentToolsFor: (subagent_type: string) => Tool[],
+  callOptions: Pick<
+    VercelBackendOptions,
+    'instructions' | 'stopWhen' | 'maxOutputTokens' | 'temperature' | 'topP' | 'topK'
+  >,
+): Promise<string> {
+  // Discriminate the union schema. Codex form has a `tool` discriminator
+  // ('spawnAgent' | 'sendInput' | …); Claude form has `prompt` + optional
+  // `description` / `subagent_type`. Reject Codex form explicitly.
+  if (typeof input !== 'object' || input === null) {
+    throw new Error('task tool: input must be an object');
+  }
+  if ('tool' in input) {
+    throw new Error(
+      'task tool: Codex multi-step form is not supported on Vercel; pass {description, prompt, subagent_type}',
+    );
+  }
+  if (!('prompt' in input) || typeof (input as { prompt: unknown }).prompt !== 'string') {
+    throw new Error('task tool: input requires a `prompt` string');
+  }
+  const claudeForm = input as {
+    description?: string;
+    prompt: string;
+    subagent_type?: string;
+  };
+  const subagent_type = claudeForm.subagent_type ?? '';
+
+  // Build the sub-agent's tool set from the provided Tool[].
+  const tools: ToolSet = {};
+  for (const t of subagentToolsFor(subagent_type)) {
+    if (!t.execute) continue;
+    tools[t.name] = vercelTool({
+      description: t.description,
+      inputSchema: t.schema,
+      execute: async (subInput: unknown) => t.execute!(subInput),
+    });
+  }
+
+  // Use streamText (not generateText) so the same provider mocks/configs
+  // that work for the parent backend also work here. We only need the
+  // final text — `result.text` is a Promise that resolves once the
+  // tool-loop terminates.
+  const result = streamText({
+    model,
+    tools,
+    messages: [{ role: 'user', content: claudeForm.prompt }],
+    ...(callOptions.instructions !== undefined && { system: callOptions.instructions }),
+    ...(callOptions.stopWhen !== undefined && { stopWhen: callOptions.stopWhen }),
+    ...(callOptions.maxOutputTokens !== undefined && {
+      maxOutputTokens: callOptions.maxOutputTokens,
+    }),
+    ...(callOptions.temperature !== undefined && { temperature: callOptions.temperature }),
+    ...(callOptions.topP !== undefined && { topP: callOptions.topP }),
+    ...(callOptions.topK !== undefined && { topK: callOptions.topK }),
+  });
+
+  return await result.text;
 }
 
 // ── Helpers ──

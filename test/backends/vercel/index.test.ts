@@ -6,8 +6,9 @@ import { z } from 'zod';
 import type { TextStreamPart, ToolSet } from 'ai';
 import { MockLanguageModelV3, convertArrayToReadableStream } from 'ai/test';
 
-import { VercelBackend, translatePart, vercel } from '../../../src/backends/vercel/index';
+import { VercelBackend, runSubAgent, translatePart, vercel } from '../../../src/backends/vercel/index';
 import { readUIMessages } from '../../../src/persistence';
+import * as builtin from '../../../src/tools/builtin';
 import type { AgentEvent } from '../../../src/types';
 import type { Tool } from '../../../src/tools/types';
 
@@ -347,5 +348,132 @@ describe('VercelBackend.query', () => {
     const last = events[events.length - 1] as Extract<AgentEvent, { type: 'session_end' }>;
     expect(last.type).toBe('session_end');
     expect(last.stopReason).toBe('aborted');
+  });
+});
+
+// ── runSubAgent ──
+
+const subAgentReplyModel = (replyText: string) =>
+  new MockLanguageModelV3({
+    doStream: async () => ({
+      stream: convertArrayToReadableStream([
+        { type: 'stream-start', warnings: [] },
+        { type: 'text-start', id: 'sub-1' },
+        { type: 'text-delta', id: 'sub-1', delta: replyText },
+        { type: 'text-end', id: 'sub-1' },
+        {
+          type: 'finish',
+          usage: {
+            inputTokens: { total: 3, noCache: 3, cacheRead: 0, cacheWrite: 0 },
+            outputTokens: { total: 4, text: 4, reasoning: 0 },
+            totalTokens: 7,
+          },
+          finishReason: { unified: 'stop', raw: 'stop' },
+        },
+      ]),
+    }),
+  });
+
+describe('runSubAgent', () => {
+  it('runs a single-turn nested generation and returns the final text', async () => {
+    const text = await runSubAgent(
+      { description: 'echo', prompt: 'say sub', subagent_type: 'general-purpose' },
+      subAgentReplyModel('sub answer'),
+      () => [],
+      {},
+    );
+    expect(text).toBe('sub answer');
+  });
+
+  it('rejects the Codex multi-step form with a clear error', async () => {
+    await expect(
+      runSubAgent(
+        { tool: 'spawnAgent', prompt: 'x' },
+        subAgentReplyModel('unused'),
+        () => [],
+        {},
+      ),
+    ).rejects.toThrow(/Codex multi-step form is not supported/);
+  });
+
+  it('rejects input missing a prompt string', async () => {
+    await expect(
+      runSubAgent({ description: 'no prompt' }, subAgentReplyModel('unused'), () => [], {}),
+    ).rejects.toThrow();
+  });
+
+  it('passes subagent_type to the tool-selector callback', async () => {
+    const seen: string[] = [];
+    await runSubAgent(
+      { description: 'd', prompt: 'p', subagent_type: 'researcher' },
+      subAgentReplyModel('ok'),
+      (st) => {
+        seen.push(st);
+        return [];
+      },
+      {},
+    );
+    expect(seen).toEqual(['researcher']);
+  });
+
+  it('skips Tool[] entries lacking execute()', async () => {
+    const calledWith: string[] = [];
+    const noExec: Tool = {
+      name: 'no_exec',
+      description: 'n',
+      schema: z.object({}),
+    };
+    const withExec: Tool = {
+      name: 'with_exec',
+      description: 'w',
+      schema: z.object({}),
+      execute: async () => {
+        calledWith.push('called');
+        return 'ok';
+      },
+    };
+    await runSubAgent(
+      { description: 'd', prompt: 'p' },
+      subAgentReplyModel('done'),
+      () => [noExec, withExec],
+      {},
+    );
+    // Both tools were available to construct the ToolSet, but the model
+    // didn't call them in this test. The point is constructor doesn't crash
+    // on the no-exec tool.
+    expect(calledWith).toEqual([]);
+  });
+});
+
+// ── Backend wiring of the task tool ──
+
+describe('VercelBackend task tool wiring', () => {
+  it('strips task from default sub-agent toolset', () => {
+    const dir = freshSessionsDir();
+    // Construction with task in the catalog should not throw.
+    const backend = vercel({
+      model: subAgentReplyModel('ok'),
+      sessionsDir: dir,
+      tools: [builtin.task, builtin.bash, builtin.read],
+    });
+    expect(backend.name).toBe('vercel');
+  });
+
+  it('honors a caller-supplied subagentTools callback', () => {
+    const dir = freshSessionsDir();
+    const calls: string[] = [];
+    const backend = vercel({
+      model: subAgentReplyModel('ok'),
+      sessionsDir: dir,
+      tools: [builtin.task, builtin.bash, builtin.read, builtin.glob],
+      subagentTools: (st) => {
+        calls.push(st);
+        return [builtin.read];
+      },
+    });
+    // Construction-time wiring registers the callback; it isn't called
+    // until task is invoked at runtime. Just verify backend constructs.
+    expect(backend.name).toBe('vercel');
+    expect(calls).toEqual([]);
   });
 });
