@@ -349,7 +349,7 @@ export class OpenAIBackend implements Backend {
 
     // Use the canonical union schema verbatim — wrapSchemaForOpenAI flattens
     // it into a top-level keyed object the SDK's tool() helper accepts.
-    const { params, unwrap } = wrapSchemaForOpenAI(taskTool.schema as z.ZodTypeAny);
+    const { params, unwrap } = wrapSchemaForOpenAI(taskTool.schema);
     const strictParams = strictifyZodForOpenAI(params);
     return tool({
       name: 'task',
@@ -402,7 +402,7 @@ export class OpenAIBackend implements Backend {
     // wrapSchemaForOpenAI flattens it into option0/option1, the model picks
     // one, unwrap returns whichever branch was filled. We store the
     // unwrapped value and let formatTodos discriminate at injection time.
-    const { params, unwrap } = wrapSchemaForOpenAI(todoTool.schema as z.ZodTypeAny);
+    const { params, unwrap } = wrapSchemaForOpenAI(todoTool.schema);
     const strictParams = strictifyZodForOpenAI(params);
     return tool({
       name: 'todo',
@@ -444,7 +444,7 @@ export class OpenAIBackend implements Backend {
       // session — cast through unknown since our JsonlSession doesn't carry
       // the brand statically.
       session = new OpenAIResponsesCompactionSession({
-        underlyingSession: session as unknown as Session & { __openai_session_api?: 'responses' },
+        underlyingSession: session,
       });
     }
 
@@ -629,10 +629,10 @@ function strictifyZodValue(v: z.ZodTypeAny): z.ZodTypeAny {
     return strictifyZodValue(inner).nullable();
   }
   if (v instanceof z.ZodObject) {
-    return strictifyZodForOpenAI(v as z.ZodObject<z.ZodRawShape>);
+    return strictifyZodForOpenAI(v);
   }
   if (v instanceof z.ZodArray) {
-    const elem = (v as z.ZodArray<z.ZodTypeAny>).element as z.ZodTypeAny;
+    const elem = (v as z.ZodArray<z.ZodTypeAny>).element;
     return z.array(strictifyZodValue(elem));
   }
   return v;
@@ -665,14 +665,14 @@ export function normalizeNullsToUndefined(args: unknown, originalSchema: z.ZodTy
     return out;
   }
   if (originalSchema instanceof z.ZodArray && Array.isArray(args)) {
-    const elem = (originalSchema as z.ZodArray<z.ZodTypeAny>).element as z.ZodTypeAny;
+    const elem = (originalSchema as z.ZodArray<z.ZodTypeAny>).element;
     return args.map((item) => normalizeNullsToUndefined(item, elem));
   }
   return args;
 }
 
 function wrapPlainTool(t: Tool): SdkTool {
-  const { params, unwrap } = wrapSchemaForOpenAI(t.schema as z.ZodTypeAny);
+  const { params, unwrap } = wrapSchemaForOpenAI(t.schema);
   const strictParams = strictifyZodForOpenAI(params);
   return tool({
     name: t.name,
@@ -712,7 +712,7 @@ export function wrapSchemaForOpenAI(schema: z.ZodTypeAny): {
   unwrap: (args: unknown) => unknown;
 } {
   if (schema instanceof z.ZodObject) {
-    return { params: schema as z.ZodObject<z.ZodRawShape>, unwrap: (a) => a };
+    return { params: schema, unwrap: (a) => a };
   }
   if (schema instanceof z.ZodUnion) {
     const opts = (schema as unknown as { options: ReadonlyArray<z.ZodTypeAny> }).options;
@@ -965,7 +965,7 @@ function* translateItemEvent(
           callId?: string;
           id?: string;
           name?: string;
-          arguments?: string | unknown;
+          arguments?: unknown;
           type?: string;
         };
       };

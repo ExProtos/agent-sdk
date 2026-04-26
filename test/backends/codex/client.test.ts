@@ -384,7 +384,7 @@ describe('CodexClient', () => {
 
     // Suppress stderr so the "handler threw" warning doesn't pollute output.
     const origWrite = process.stderr.write.bind(process.stderr);
-    process.stderr.write = (() => true) as typeof process.stderr.write;
+    process.stderr.write = (() => true);
 
     try {
       const client = await CodexClient.start({

@@ -125,7 +125,7 @@ describe('translatePart', () => {
         toolName: 'bash',
         input: { command: 'ls' },
         output: 'file1\nfile2',
-      } as TextStreamPart<ToolSet>),
+      }),
     ).toEqual([
       { type: 'tool_result', result: { toolCallId: 'tc1', output: 'file1\nfile2', isError: false } },
     ]);
@@ -138,7 +138,7 @@ describe('translatePart', () => {
       toolName: 'bash',
       input: { command: 'bad' },
       error: new Error('boom'),
-    } as TextStreamPart<ToolSet>);
+    });
     expect(events).toEqual([
       {
         type: 'tool_result',
@@ -173,7 +173,7 @@ function makeTool(name: string, opts: Partial<Tool> = {}): Tool {
     description: `${name} tool`,
     schema: z.object({}),
     ...opts,
-  } as Tool;
+  };
 }
 
 const echoModel = () =>
@@ -636,8 +636,8 @@ function todoToolPart(input: unknown, toolCallId: string): UIMessage['parts'][nu
     toolCallId,
     state: 'output-available',
     input: input as never,
-    output: 'todos updated' as never,
-  } as UIMessage['parts'][number];
+    output: 'todos updated',
+  };
 }
 
 describe('findLatestTodoInput', () => {

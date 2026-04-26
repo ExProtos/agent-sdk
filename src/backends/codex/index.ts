@@ -449,7 +449,7 @@ export function translateNotification(
       if (p.turn.error) {
         queue.push({ type: 'error', message: p.turn.error.message, retryable: false });
       }
-      queue.push({ type: 'session_end', stopReason: stopReason as 'stop' | 'aborted' | 'error', usage: zeroUsage() });
+      queue.push({ type: 'session_end', stopReason: stopReason, usage: zeroUsage() });
       queue.end();
       return;
     }

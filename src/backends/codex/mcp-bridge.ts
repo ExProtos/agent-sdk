@@ -100,7 +100,7 @@ export class McpBridge {
       manifest.push({
         name: tool.name,
         description: tool.description,
-        inputSchema: z.toJSONSchema(tool.schema) as Record<string, unknown>,
+        inputSchema: z.toJSONSchema(tool.schema),
       });
     }
 

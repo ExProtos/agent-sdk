@@ -582,7 +582,7 @@ export async function runSubAgent(
       'task tool: Codex multi-step form is not supported on Vercel; pass {description, prompt, subagent_type}',
     );
   }
-  if (!('prompt' in input) || typeof (input as { prompt: unknown }).prompt !== 'string') {
+  if (!('prompt' in input) || typeof (input).prompt !== 'string') {
     throw new Error('task tool: input requires a `prompt` string');
   }
   const claudeForm = input as {
@@ -698,7 +698,7 @@ export async function compactHistory(args: {
           state: 'output-available',
           input: todos,
           output: 'todos updated',
-        } as UIMessage['parts'][number],
+        },
       ],
     });
   }

@@ -47,7 +47,7 @@ if (!socketPath || !manifestJson) {
   process.exit(1);
 }
 
-const manifest: ManifestEntry[] = JSON.parse(manifestJson);
+const manifest = JSON.parse(manifestJson) as ManifestEntry[];
 process.stderr.write(
   `[shim] starting; socket=${socketPath} manifest=${manifest.map((m) => m.name).join(',')}\n`,
 );
