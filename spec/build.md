@@ -259,5 +259,5 @@ See [test.md](test.md). Build with the test layout in place from the start — a
 - `pnpm test` (unit) passes — should be fast, ~1s, no network
 - `pnpm test:e2e` passes when `.env.test` is configured; tests that depend on missing credentials skip cleanly
 - `pnpm build` produces `dist/` with `.js` and `.d.ts` files for every `src/` module
-- The 10-tool catalog roundtrips: e2e tests register a custom tool on Codex (closure flows shim → socket → parent → `execute` → return → MCP → model) and on Claude (closure flows in-process via `createSdkMcpServer`); both verify the canonical name surfaces in events instead of the wire name (`mcp__agent-sdk-tools__*`).
+- The canonical tool catalog roundtrips: e2e tests register a custom tool on Codex (closure flows shim → socket → parent → `execute` → return → MCP → model) and on Claude (closure flows in-process via `createSdkMcpServer`); both verify the canonical name surfaces in events instead of the wire name (`mcp__agent-sdk-tools__*`).
 - No backend imports another backend's code — `grep -r "backends/codex" src/backends/claude` and vice versa return nothing

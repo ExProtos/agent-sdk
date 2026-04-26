@@ -16,9 +16,8 @@ import {
 import type { Tool } from '../../src/tools/types';
 
 describe('builtin tools', () => {
-  it('all is the canonical 10-tool set', () => {
+  it('all is the canonical tool catalog in declaration order', () => {
     expect(all).toEqual([bash, read, write, edit, glob, grep, webFetch, webSearch, todo, task]);
-    expect(all).toHaveLength(10);
   });
 
   it('every tool has unique name', () => {
@@ -213,8 +212,11 @@ describe('schema validation', () => {
 
 describe('Tool type guarantees', () => {
   it('every tool can be passed where a Tool is expected', () => {
+    // The real assertion is structural: this typechecks. The runtime
+    // expectations just guard against an empty/nonsense catalog.
     const list: Tool[] = [bash, read, write, edit, glob, grep, webFetch, webSearch, todo, task];
-    expect(list.length).toBe(10);
+    expect(list.length).toBeGreaterThan(0);
+    expect(list.every((t) => typeof t.name === 'string')).toBe(true);
   });
 });
 
