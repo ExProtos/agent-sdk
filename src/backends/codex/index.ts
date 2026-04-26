@@ -82,7 +82,7 @@ const STALE_THREAD_RE = /thread.*not found|no such thread|thread.*does not exist
 class CodexAuthRequiredError extends Error {
   constructor() {
     super(
-      'codex is not logged in. Run `codex login` (optionally with `CODEX_HOME=<codexHome> codex login` for a custom dir) before using this backend.',
+      'codex is not logged in. Run `codex login` (or `CODEX_HOME=<dir> codex login` for a custom auth location) before using this backend.',
     );
     this.name = 'CodexAuthRequiredError';
   }

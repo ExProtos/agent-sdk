@@ -67,7 +67,7 @@ Swap the backend with no other changes:
 import { codex, vercel, openai, hostedTools } from 'agent-sdk';
 import { anthropic } from '@ai-sdk/anthropic';
 
-// Codex (subscription or OPENAI_API_KEY)
+// Codex (auth from ~/.codex/auth.json, populated by `codex login`)
 new Agent({ backend: codex({ tools: tools.all }) });
 
 // Vercel — any AI SDK provider works

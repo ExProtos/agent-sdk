@@ -26,9 +26,9 @@ export function claudeOAuthPreferredToken(): string | undefined {
 
 /**
  * Codex auth is checked at runtime via account/read — we can't pre-detect
- * via env vars alone (ChatGPT OAuth tokens live in ~/.codex/auth.json).
+ * via env vars alone (auth lives entirely in ~/.codex/auth.json).
  * Tests that need Codex set AGENT_SDK_CODEX_E2E=1 to opt in explicitly,
- * acknowledging they have `codex login` done or OPENAI_API_KEY set.
+ * acknowledging they have `codex login` done.
  */
 export const codexE2eEnabled = process.env.AGENT_SDK_CODEX_E2E === '1';
 

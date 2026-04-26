@@ -3,7 +3,8 @@
  *
  * Required:
  *   - codex binary on PATH
- *   - logged in (`codex login`) OR OPENAI_API_KEY set
+ *   - `codex login` has populated `~/.codex/auth.json` (ChatGPT OAuth or
+ *     API key via `codex login --with-api-key` — both write the same file)
  *   - AGENT_SDK_CODEX_E2E=1 to opt in (since we can't auto-detect ChatGPT
  *     OAuth from env vars alone)
  *

@@ -346,7 +346,7 @@ Each backend exposes typed auth fields on its options; ambient env is the fallba
 
 Subscription OAuth is licensed for personal use; multi-user products should use API keys. The wrapper enforces nothing — it's the consumer's responsibility to read the licensing terms.
 
-The Codex backend explicitly verifies auth on each `query()` by calling `account/read` first; if `account` is null, it emits an `error` event with `"codex is not logged in. Run \`codex login\` (optionally with \`CODEX_HOME=<codexHome> codex login\` for a custom dir) before using this backend."` and ends the query cleanly.
+Codex performs an additional runtime auth-verification step before each query — see [backends/codex.md](backends/codex.md#auth-verification-runtime).
 
 ## Packaging
 

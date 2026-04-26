@@ -1,6 +1,6 @@
 # Codex backend
 
-Drives `codex app-server` over JSON-RPC stdio. Codex owns the agent loop, system prompt assembly (its `developerInstructions` field appends to whatever Codex already builds), tool execution for built-ins, and credential reading from `~/.codex/auth.json` (or `OPENAI_API_KEY`).
+Drives `codex app-server` over JSON-RPC stdio. Codex owns the agent loop, system prompt assembly (its `developerInstructions` field appends to whatever Codex already builds), tool execution for built-ins, and credential reading from `auth.json` (under `$CODEX_HOME` or the default `~/.codex/`).
 
 We translate Codex's typed item stream to our canonical `AgentEvent` union and bridge user-supplied custom tools through a small MCP server that runs as a subprocess.
 
@@ -327,15 +327,7 @@ The previous `env?: Record<string, string | undefined>` passthrough was removed.
 
 ## Auth verification (runtime)
 
-Before doing anything else, `query()` calls `account/read`. If `account` is null, push:
-
-```typescript
-new CodexAuthRequiredError(
-  'codex is not logged in. Run `codex login` (optionally with `CODEX_HOME=<codexHome> codex login` for a custom dir) before using this backend.',
-)
-```
-
-…then `queue.end()`. This is the friendliest place to catch missing auth — letting it through to `thread/start` produces an opaque RPC error.
+Before doing anything else, `query()` calls `account/read`. If `account` is null, the backend emits an `error` event carrying a `CodexAuthRequiredError` — a message that names the missing auth, points the user at `codex login`, and explains how to handle a custom `codexHome` — then ends the queue. This is the friendliest place to catch missing auth; letting it through to `thread/start` produces an opaque RPC error.
 
 ## What we don't do
 

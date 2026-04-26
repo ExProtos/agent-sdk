@@ -93,6 +93,6 @@ Each e2e test starts with a `hasAnthropicAuth()` or `codexE2eEnabled()` guard fr
 E2E tests opt in:
 
 - Claude e2e runs when `CLAUDE_CODE_OAUTH_TOKEN` (or `ANTHROPIC_API_KEY`) is in `.env.test`.
-- Codex e2e runs when `AGENT_SDK_CODEX_E2E=1` is in `.env.test` AND `codex login` has been run (or `OPENAI_API_KEY` is set).
+- Codex e2e runs when `AGENT_SDK_CODEX_E2E=1` is in `.env.test` AND `codex login` has populated `~/.codex/auth.json` (run `codex login --with-api-key` once if you want API-key auth instead of ChatGPT OAuth).
 
 The CI default is "run unit tests, expect e2e to skip" — having e2e in CI without credentials would surface skips without false positives.
