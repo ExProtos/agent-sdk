@@ -297,19 +297,28 @@ export class OpenAIAgentsBackend implements Backend {
     const modelSettings = this.modelSettings;
     const instructions = this.instructions;
 
-    // Restrict to Claude one-shot form so we can pass a clean ZodObject
-    // (the SDK's tool() helper requires ToolInputParameters = ZodObjectLike).
+    // Use the canonical union schema verbatim — wrapSchemaForOpenAI flattens
+    // it into a top-level keyed object the SDK's tool() helper accepts.
+    const { params, unwrap } = wrapSchemaForOpenAI(taskTool.schema as z.ZodTypeAny);
     return tool({
       name: 'task',
       description: taskTool.description,
       strict: true,
-      parameters: z.object({
-        description: z.string(),
-        prompt: z.string(),
-        subagent_type: z.string().optional(),
-      }),
-      execute: async (input) => {
-        const i = input as { description: string; prompt: string; subagent_type?: string };
+      parameters: params,
+      execute: async (args: unknown) => {
+        const input = unwrap(args);
+        if (typeof input !== 'object' || input === null) {
+          throw new Error('task tool: input must be an object');
+        }
+        if ('tool' in input) {
+          throw new Error(
+            'task tool: Codex multi-step form is not supported on OpenAI Agents; pass the Claude form (description, prompt, subagent_type)',
+          );
+        }
+        const i = input as { description?: string; prompt: string; subagent_type?: string };
+        if (typeof i.prompt !== 'string') {
+          throw new Error('task tool: input requires a `prompt` string');
+        }
         const subagentType = i.subagent_type ?? '';
         const childTools = subagentToolsFor(subagentType).filter((t) => t.name !== 'task');
         const childSdkTools: SdkTool[] = [];
@@ -337,20 +346,18 @@ export class OpenAIAgentsBackend implements Backend {
 
   private buildTodoTool(todoTool: Tool): SdkTool {
     const todos = this.todosByContinuation;
+    // Use the canonical union schema (Claude's structured + Codex's text) —
+    // wrapSchemaForOpenAI flattens it into option0/option1, the model picks
+    // one, unwrap returns whichever branch was filled. We store the
+    // unwrapped value and let formatTodos discriminate at injection time.
+    const { params, unwrap } = wrapSchemaForOpenAI(todoTool.schema as z.ZodTypeAny);
     return tool({
       name: 'todo',
       description: todoTool.description,
       strict: true,
-      parameters: z.object({
-        todos: z.array(
-          z.object({
-            content: z.string(),
-            status: z.enum(['pending', 'in_progress', 'completed']),
-            activeForm: z.string(),
-          }),
-        ),
-      }),
-      execute: async (input, runContext) => {
+      parameters: params,
+      execute: async (args: unknown, runContext) => {
+        const input = unwrap(args);
         const ctx = runContext?.context as { continuation?: string } | undefined;
         if (ctx?.continuation !== undefined) {
           todos.set(ctx.continuation, input);
@@ -466,14 +473,14 @@ export function rewriteJsonl(filePath: string, items: AgentInputItem[]): void {
 // ── Helpers ──
 
 function wrapPlainTool(t: Tool): SdkTool {
-  const { params, wrapped } = wrapSchemaForOpenAI(t.schema);
+  const { params, unwrap } = wrapSchemaForOpenAI(t.schema as z.ZodTypeAny);
   return tool({
     name: t.name,
     description: t.description,
     strict: true,
     parameters: params,
     execute: async (args: unknown) => {
-      const actualArgs = wrapped ? (args as { input: unknown }).input : args;
+      const actualArgs = unwrap(args);
       const result = await t.execute!(actualArgs);
       return typeof result === 'string' ? result : JSON.stringify(result);
     },
@@ -481,40 +488,82 @@ function wrapPlainTool(t: Tool): SdkTool {
 }
 
 /**
- * The SDK's tool() helper requires `ToolInputParameters = ZodObjectLike`.
- * Object schemas pass through unchanged; non-object schemas (unions,
- * arrays, primitives) are wrapped as `{input: <schema>}` and unwrapped
- * before calling the user's execute. Same pattern as Claude's MCP tool
- * registration.
+ * The SDK's `tool()` helper requires `ToolInputParameters = ZodObjectLike` —
+ * unions and non-objects are not allowed at the top level. We work around
+ * this by transforming the schema:
+ *
+ *   - **ZodObject** → pass through unchanged. `unwrap` is identity.
+ *   - **ZodUnion**  → flatten branches into a top-level keyed object,
+ *                     `{option0?: <branch0>, option1?: <branch1>, …}`. The
+ *                     model fills exactly one key; everything else stays
+ *                     undefined. `unwrap` returns the value of the first
+ *                     defined key. Same trick as the `{input: …}` wrapping
+ *                     for non-objects, applied per-branch.
+ *   - **anything else** → wrap as `{input: <schema>}`; `unwrap` extracts
+ *                          `args.input`.
+ *
+ * This lets the canonical `edit`, `todo`, and `task` tools (all unions in
+ * the catalog) flow through verbatim — the model picks whichever branch
+ * its training prefers, and `execute` receives the original union shape.
  */
-export function wrapSchemaForOpenAI(
-  schema: unknown,
-): { params: z.ZodObject<z.ZodRawShape>; wrapped: boolean } {
+export function wrapSchemaForOpenAI(schema: z.ZodTypeAny): {
+  params: z.ZodObject<z.ZodRawShape>;
+  unwrap: (args: unknown) => unknown;
+} {
   if (schema instanceof z.ZodObject) {
-    return { params: schema as z.ZodObject<z.ZodRawShape>, wrapped: false };
+    return { params: schema as z.ZodObject<z.ZodRawShape>, unwrap: (a) => a };
   }
-  return { params: z.object({ input: schema as z.ZodTypeAny }), wrapped: true };
+  if (schema instanceof z.ZodUnion) {
+    const opts = (schema as unknown as { options: ReadonlyArray<z.ZodTypeAny> }).options;
+    const shape: Record<string, z.ZodTypeAny> = {};
+    for (let i = 0; i < opts.length; i++) {
+      shape[optionKey(i)] = opts[i]!.optional();
+    }
+    return {
+      params: z.object(shape),
+      unwrap: (args: unknown) => {
+        if (args === null || typeof args !== 'object') return args;
+        const a = args as Record<string, unknown>;
+        for (let i = 0; i < opts.length; i++) {
+          const v = a[optionKey(i)];
+          if (v !== undefined && v !== null) return v;
+        }
+        return args;
+      },
+    };
+  }
+  return {
+    params: z.object({ input: schema }),
+    unwrap: (args: unknown) =>
+      args !== null && typeof args === 'object' ? (args as { input: unknown }).input : args,
+  };
+}
+
+function optionKey(i: number): string {
+  return `option${i}`;
 }
 
 /**
  * Format the `todo` tool input as a checklist for system-prompt injection.
- * Mirrors Vercel's formatTodos but only handles the Claude shape since
- * we restrict the todo tool to that shape on this backend (the SDK's
- * tool() helper requires a ZodObject, not a union).
+ * Handles both branches of the canonical `todo` schema (Claude structured
+ * shape and Codex freeform shape). Returns '' for unrecognized shapes.
  */
 export function formatTodos(input: unknown): string {
   if (typeof input !== 'object' || input === null) return '';
-  const i = input as { todos?: unknown };
-  if (!Array.isArray(i.todos)) return '';
-  return i.todos
-    .map((t) => {
-      const item = t as { content?: unknown; status?: unknown };
-      const box =
-        item.status === 'completed' ? '[x]' : item.status === 'in_progress' ? '[~]' : '[ ]';
-      const content = typeof item.content === 'string' ? item.content : String(item.content);
-      return `${box} ${content}`;
-    })
-    .join('\n');
+  const i = input as { text?: unknown; todos?: unknown };
+  if (typeof i.text === 'string') return i.text;
+  if (Array.isArray(i.todos)) {
+    return i.todos
+      .map((t) => {
+        const item = t as { content?: unknown; status?: unknown };
+        const box =
+          item.status === 'completed' ? '[x]' : item.status === 'in_progress' ? '[~]' : '[ ]';
+        const content = typeof item.content === 'string' ? item.content : String(item.content);
+        return `${box} ${content}`;
+      })
+      .join('\n');
+  }
+  return '';
 }
 
 export function combineSystem(
@@ -752,20 +801,48 @@ function safeParseJson(s: string): unknown {
  * function_call to the `todo` tool. Used on cache-miss reload so the
  * callModelInputFilter injection survives process restarts without a
  * separate sidecar file — the JSONL is the single source of truth.
+ *
+ * Returns the unwrapped tool input — the canonical Claude or Codex shape,
+ * not the `{option0: …}` form the model emitted to satisfy the SDK's
+ * top-level-object schema requirement.
  */
 export function findLatestTodoInput(items: AgentInputItem[]): unknown {
   for (let i = items.length - 1; i >= 0; i--) {
     const item = items[i] as { type?: string; name?: string; arguments?: unknown } | undefined;
     if (item?.type !== 'function_call' || item.name !== 'todo') continue;
-    const args = item.arguments;
+    let args: unknown = item.arguments;
     if (typeof args === 'string') {
       try {
-        return JSON.parse(args);
+        args = JSON.parse(args);
       } catch {
         return undefined;
       }
     }
-    return args;
+    return unwrapStoredArgs(args);
   }
   return undefined;
+}
+
+/**
+ * Reverse the schema-wrapping that wrapSchemaForOpenAI applies. Used when
+ * reading args back from the JSONL store (where they were JSON-encoded by
+ * the model in the wrapped shape) so we get the canonical shape back.
+ *
+ * Detects the wrapping form by structure: `{input: …}` (single-key, for
+ * non-object schemas) or `{option0: …, option1: …, …}` (for unions).
+ * Falls through unchanged if the shape doesn't match either pattern.
+ */
+export function unwrapStoredArgs(args: unknown): unknown {
+  if (typeof args !== 'object' || args === null) return args;
+  const a = args as Record<string, unknown>;
+  const keys = Object.keys(a);
+  if (keys.length === 1 && keys[0] === 'input') return a.input;
+  const optionKeys = keys.filter((k) => /^option\d+$/.test(k));
+  if (optionKeys.length > 0) {
+    for (const k of optionKeys) {
+      const v = a[k];
+      if (v !== undefined && v !== null) return v;
+    }
+  }
+  return args;
 }

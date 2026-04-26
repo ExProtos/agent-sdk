@@ -77,9 +77,9 @@ The backend has three tool registration paths plus a special-case for `task`. At
 | Condition | Treatment |
 |---|---|
 | `t.hosted?.openai` set | Forward the stashed SDK hosted-tool object directly into `Agent.tools`. `execute` is not called — the tool runs server-side in OpenAI's infra. |
-| `t.name === 'task'` | Build a child `Agent` (same model, parent's tools minus `task`) and add `parentAgent.asTool({ toolName: 'task', toolDescription: t.description, parameters: t.schema })`. `Agent.asTool()` is the SDK's built-in one-shot delegation primitive; the child runs with generated input and returns text. Codex multi-step form rejected at execution time with the same error as Vercel. |
-| `t.name === 'todo'` | Special-cased: function tool whose execute writes to a per-continuation `Map<string, unknown>`; `callModelInputFilter` re-injects the latest todos into `instructions` before each model call. |
-| Has `execute`, none of the above | Wrapped via the SDK's `tool({name, description, parameters: t.schema, execute})`. Closure runs in-process. |
+| `t.name === 'task'` | Special-cased function tool: receives the canonical union schema (Claude one-shot or Codex multi-step) flattened by `wrapSchemaForOpenAI`. On execute, unwraps the chosen branch, rejects the Codex form with a clear error, builds a child `Agent` (same model + instructions, tools from `subagentTools(subagent_type)` minus `task` itself), and runs it via nested `run()`. Returns `result.finalOutput`. |
+| `t.name === 'todo'` | Special-cased function tool: receives the canonical union schema (Claude `{todos: [...]}` or Codex `{text: …}`). On execute, unwraps the chosen branch and writes to a per-continuation `Map<string, unknown>`. `callModelInputFilter` re-injects the latest todos into `instructions` before each model call. |
+| Has `execute`, none of the above | Wrapped via the SDK's `tool({name, description, parameters, execute})`. Closure runs in-process. Schema gets shape-promoted (see [Schema shape promotion](#schema-shape-promotion)). |
 | Otherwise | Silently skipped (matches Vercel). |
 
 `native.claude` / `native.codex` are ignored entirely. Same posture as Vercel.
@@ -101,6 +101,20 @@ export const hostedTools = {
 ```
 
 The wrapper schema (`z.object({})`) is informational only — the model never sees it. Hosted tools are dispatched server-side; OpenAI knows their real schemas. We carry just enough to surface a canonical name in events.
+
+### Schema shape promotion
+
+The SDK's `tool()` helper requires `ToolInputParameters = ZodObjectLike` — unions and primitives are not allowed at the top level. `wrapSchemaForOpenAI` transforms the schema and provides a matching `unwrap` callback:
+
+| Input shape | Wrapped shape | unwrap |
+|---|---|---|
+| `z.object({…})` | unchanged | identity |
+| `z.union([A, B, C])` | `z.object({option0?: A, option1?: B, option2?: C})` | returns the value of the first defined option key |
+| anything else (arrays, primitives) | `z.object({input: <schema>})` | returns `args.input` |
+
+The model fills exactly one branch on a union — `option0` or `option1` etc. — and `unwrap` returns that branch's value to the caller's `execute`. From the consumer's perspective the wrapping is invisible: `t.execute({...})` receives the original Claude or Codex shape.
+
+The reverse path (reading function-call args back from the JSONL store on cache-miss reload) uses `unwrapStoredArgs`, which detects the wrapping by structure (`{input: …}` single-key, or `{option0?, option1?, …}` keys) and returns the canonical shape. `findLatestTodoInput` uses this so reloaded todos go straight into `formatTodos` without the wrapper layer leaking through.
 
 ### Tool type extension
 

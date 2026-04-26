@@ -15,6 +15,7 @@ import {
   readJsonlItems,
   rewriteJsonl,
   translateStreamEvent,
+  unwrapStoredArgs,
   wrapSchemaForOpenAI,
 } from '../../../src/backends/openai-agents/index';
 import * as hostedTools from '../../../src/backends/openai-agents/hosted';
@@ -25,27 +26,48 @@ import type { AgentEvent } from '../../../src/types';
 // ── wrapSchemaForOpenAI ──
 
 describe('wrapSchemaForOpenAI', () => {
-  it('passes ZodObject through unchanged', () => {
+  it('passes ZodObject through unchanged with identity unwrap', () => {
     const schema = z.object({ foo: z.string() });
-    const { params, wrapped } = wrapSchemaForOpenAI(schema);
-    expect(wrapped).toBe(false);
+    const { params, unwrap } = wrapSchemaForOpenAI(schema);
     expect(params).toBe(schema);
+    expect(unwrap({ foo: 'hi' })).toEqual({ foo: 'hi' });
   });
 
-  it('wraps non-object schemas as { input: <schema> }', () => {
-    const schema = z.union([z.object({ a: z.string() }), z.object({ b: z.number() })]);
-    const { params, wrapped } = wrapSchemaForOpenAI(schema);
-    expect(wrapped).toBe(true);
+  it('flattens unions into a top-level keyed object (option0/option1/…)', () => {
+    const schema = z.union([
+      z.object({ a: z.string() }),
+      z.object({ b: z.number() }),
+      z.object({ c: z.boolean() }),
+    ]);
+    const { params, unwrap } = wrapSchemaForOpenAI(schema);
     expect(params).toBeInstanceOf(z.ZodObject);
-    // The wrapped shape carries an `input` key
-    const parsed = params.parse({ input: { a: 'hi' } });
-    expect(parsed).toEqual({ input: { a: 'hi' } });
+    // Both branches present, only one filled
+    expect(unwrap({ option0: { a: 'hi' } })).toEqual({ a: 'hi' });
+    expect(unwrap({ option1: { b: 42 } })).toEqual({ b: 42 });
+    expect(unwrap({ option2: { c: true } })).toEqual({ c: true });
+    // Nothing filled — pass through unchanged
+    expect(unwrap({})).toEqual({});
   });
 
-  it('wraps array schemas', () => {
-    const { params, wrapped } = wrapSchemaForOpenAI(z.array(z.string()));
-    expect(wrapped).toBe(true);
+  it('wraps array schemas as { input: <schema> }', () => {
+    const { params, unwrap } = wrapSchemaForOpenAI(z.array(z.string()));
     expect(params.parse({ input: ['a', 'b'] })).toEqual({ input: ['a', 'b'] });
+    expect(unwrap({ input: ['a', 'b'] })).toEqual(['a', 'b']);
+  });
+
+  it('wraps primitive schemas as { input: <schema> }', () => {
+    const { params, unwrap } = wrapSchemaForOpenAI(z.string());
+    expect(params.parse({ input: 'hello' })).toEqual({ input: 'hello' });
+    expect(unwrap({ input: 'hello' })).toBe('hello');
+  });
+
+  it('union unwrap picks the first defined option key', () => {
+    const schema = z.union([z.object({ a: z.string() }), z.object({ b: z.number() })]);
+    const { unwrap } = wrapSchemaForOpenAI(schema);
+    // option0 wins when both happen to be set
+    expect(unwrap({ option0: { a: 'hi' }, option1: { b: 1 } })).toEqual({ a: 'hi' });
+    // null is treated as "not filled"
+    expect(unwrap({ option0: null, option1: { b: 7 } })).toEqual({ b: 7 });
   });
 });
 
@@ -63,8 +85,8 @@ describe('formatTodos', () => {
     expect(out).toBe('[x] do A\n[~] do B\n[ ] do C');
   });
 
-  it('returns empty string for non-Claude shape (Codex text form)', () => {
-    expect(formatTodos({ text: 'plan stuff' })).toBe('');
+  it('formats Codex shape (text) verbatim', () => {
+    expect(formatTodos({ text: 'plan stuff' })).toBe('plan stuff');
   });
 
   it('returns empty string for unrecognized shapes', () => {
@@ -227,6 +249,57 @@ describe('findLatestTodoInput', () => {
   it('returns undefined for malformed string arguments', () => {
     const items = [{ type: 'function_call', name: 'todo', arguments: 'not json' }] as any[];
     expect(findLatestTodoInput(items)).toBeUndefined();
+  });
+
+  it('unwraps option0/option1 wrapping on read (model emitted the wrapped union shape)', () => {
+    const items = [
+      {
+        type: 'function_call',
+        name: 'todo',
+        arguments: JSON.stringify({ option0: { todos: [{ content: 'do it' }] } }),
+      },
+    ] as any[];
+    expect(findLatestTodoInput(items)).toEqual({ todos: [{ content: 'do it' }] });
+  });
+
+  it('unwraps the Codex branch (option1) when that was the one filled', () => {
+    const items = [
+      {
+        type: 'function_call',
+        name: 'todo',
+        arguments: JSON.stringify({ option1: { text: 'freeform plan' } }),
+      },
+    ] as any[];
+    expect(findLatestTodoInput(items)).toEqual({ text: 'freeform plan' });
+  });
+});
+
+// ── unwrapStoredArgs ──
+
+describe('unwrapStoredArgs', () => {
+  it('unwraps single { input: ... } shape', () => {
+    expect(unwrapStoredArgs({ input: 'hello' })).toBe('hello');
+    expect(unwrapStoredArgs({ input: [1, 2] })).toEqual([1, 2]);
+  });
+
+  it('does NOT unwrap when there are sibling keys alongside `input`', () => {
+    expect(unwrapStoredArgs({ input: 'hi', other: 1 })).toEqual({ input: 'hi', other: 1 });
+  });
+
+  it('unwraps option0/option1/... and returns the first defined branch', () => {
+    expect(unwrapStoredArgs({ option0: { a: 1 } })).toEqual({ a: 1 });
+    expect(unwrapStoredArgs({ option0: null, option1: { b: 2 } })).toEqual({ b: 2 });
+  });
+
+  it('returns input unchanged when no wrapping pattern matches', () => {
+    expect(unwrapStoredArgs({ todos: [] })).toEqual({ todos: [] });
+    expect(unwrapStoredArgs({ command: 'ls' })).toEqual({ command: 'ls' });
+  });
+
+  it('returns input unchanged for non-objects', () => {
+    expect(unwrapStoredArgs(undefined)).toBeUndefined();
+    expect(unwrapStoredArgs(null)).toBeNull();
+    expect(unwrapStoredArgs('hi')).toBe('hi');
   });
 });
 
