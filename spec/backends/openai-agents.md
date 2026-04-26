@@ -50,8 +50,10 @@ export interface OpenAIAgentsBackendOptions {
   /**
    * If true, wrap the underlying session in `OpenAIResponsesCompactionSession`
    * to auto-compact when history grows. Cannot combine with `useConversations`
-   * (compaction rewrites history; Conversations stores it server-side).
-   * Default false.
+   * (compaction rewrites locally-stored items; Conversations stores them
+   * server-side). Default `true` for non-Conversations sessions (parity with
+   * Claude/Codex/Vercel which all auto-compact); silently disabled when
+   * `useConversations: true`. Opt out explicitly with `autoCompact: false`.
    */
   autoCompact?: boolean;
 }
@@ -142,7 +144,10 @@ constructor(options: OpenAIAgentsBackendOptions) {
   if (options.useConversations && options.sessionsDir) {
     throw new Error('useConversations and sessionsDir are mutually exclusive');
   }
-  if (options.useConversations && options.autoCompact) {
+  // Only throw when caller explicitly sets autoCompact: true alongside
+  // useConversations. Default autoCompact is true (parity with other
+  // backends), but it silently drops to false when useConversations is on.
+  if (options.useConversations && options.autoCompact === true) {
     throw new Error('useConversations and autoCompact are mutually exclusive');
   }
 
@@ -152,7 +157,7 @@ constructor(options: OpenAIAgentsBackendOptions) {
   this.maxTurns = options.maxTurns ?? 20;
   this.sessionsDir = options.sessionsDir;
   this.useConversations = options.useConversations ?? false;
-  this.autoCompact = options.autoCompact ?? false;
+  this.autoCompact = options.autoCompact ?? !this.useConversations;
 
   const parentTools = options.tools ?? [];
   this.hasTodoTool = parentTools.some((t) => t.name === 'todo');
@@ -407,11 +412,17 @@ The local Session paths (memory, JSONL) treat missing JSONL as "no prior history
 
 `OPENAI_API_KEY` env (read by the SDK's default OpenAI client). We don't validate; we let the SDK fail. Documented explicitly: *"Use Codex backend if you want ChatGPT subscription auth (`codex login`); use this backend if you have an API key and want hosted tools, tracing, or programmatic agent orchestration."*
 
-## Compaction (opt-in)
+## Compaction
 
-`autoCompact: true` wraps the underlying Session in `OpenAIResponsesCompactionSession` (from `@openai/agents-openai`), which calls OpenAI's `responses.compact` API after each completed turn when history grows beyond an internal threshold. The decorator implements the SDK's `OpenAIResponsesCompactionAwareSession` extension, so the runner automatically supplies the latest `responseId` and invokes compaction at the right boundary. We don't write any compaction logic ourselves — purely a wrapper.
+On by default for non-Conversations sessions. `autoCompact: true` wraps the underlying Session in `OpenAIResponsesCompactionSession` (from `@openai/agents-openai`), which calls OpenAI's `responses.compact` API after each completed turn when history grows beyond the SDK's internal threshold. The decorator implements `OpenAIResponsesCompactionAwareSession`, so the runner automatically supplies the latest `responseId` and invokes compaction at the right boundary. We don't write any compaction logic ourselves — purely a wrapper.
 
-Mutually exclusive with `useConversations` because the compaction decorator rewrites stored history in-place, which conflicts with server-side state.
+How it works under the hood (per the SDK source):
+- Items live in your local Session (MemorySession or our JsonlSession). The SDK doesn't store them remotely.
+- After each completed turn, the runner asks the decorated session to compact.
+- The decorator calls `responses.compact` — sending the locally-stored items, getting back a compacted version.
+- The decorator clears the underlying Session and writes the compacted items back. Same destructive semantics as Vercel's compaction — when paired with `JsonlSession`, the file is rewritten in place.
+
+**Mutually exclusive with `useConversations`** because the compaction decorator requires local storage to clear and rewrite; Conversations sessions are server-managed. Default behavior handles this transparently — when you pass `useConversations: true`, `autoCompact` silently drops to `false`. We only throw when you explicitly set both to `true`.
 
 ## What we don't do
 

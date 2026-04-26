@@ -18,8 +18,11 @@
  *     - `useConversations: true` → server-side OpenAIConversationsSession
  *     - `sessionsDir` set        → JsonlSession (our impl) at <dir>/<id>.jsonl
  *     - neither                  → MemorySession (lost on process exit)
- * - Optional auto-compaction via `autoCompact: true` (wraps non-Conversations
- *   session in OpenAIResponsesCompactionSession)
+ * - Auto-compaction on by default for non-Conversations sessions: wraps the
+ *   underlying Session in OpenAIResponsesCompactionSession, which calls
+ *   OpenAI's `responses.compact` API after each turn that crosses the SDK's
+ *   internal threshold and rewrites the local items in place. Opt out via
+ *   `autoCompact: false`.
  * - No mid-turn push() — same as Codex; `run()` is single-turn-shaped
  */
 import { randomUUID } from 'node:crypto';
@@ -95,8 +98,12 @@ export interface OpenAIAgentsBackendOptions {
   useConversations?: boolean;
   /**
    * If true, wrap the underlying session in OpenAIResponsesCompactionSession
-   * to auto-compact when history grows. Mutually exclusive with
-   * `useConversations`. Default false.
+   * to auto-compact when history grows. The decorator calls OpenAI's
+   * `responses.compact` API and rewrites the local Session items in place.
+   * Mutually exclusive with `useConversations` (Conversations sessions
+   * manage history server-side; the decorator requires local storage).
+   * Default `true` — matches Claude/Codex/Vercel parity (auto-compact on
+   * by default; opt out explicitly with `autoCompact: false`).
    */
   autoCompact?: boolean;
 }
@@ -130,7 +137,11 @@ export class OpenAIAgentsBackend implements Backend {
         'OpenAIAgentsBackend: useConversations and sessionsDir are mutually exclusive',
       );
     }
-    if (options.useConversations && options.autoCompact) {
+    // Only throw when the caller explicitly sets autoCompact: true alongside
+    // useConversations. The autoCompact default is true for parity with the
+    // other backends; the implicit default silently drops to false when
+    // useConversations is on (Conversations manages history server-side).
+    if (options.useConversations && options.autoCompact === true) {
       throw new Error(
         'OpenAIAgentsBackend: useConversations and autoCompact are mutually exclusive',
       );
@@ -142,7 +153,9 @@ export class OpenAIAgentsBackend implements Backend {
     this.maxTurns = options.maxTurns ?? DEFAULT_MAX_TURNS;
     this.sessionsDir = options.sessionsDir;
     this.useConversations = options.useConversations ?? false;
-    this.autoCompact = options.autoCompact ?? false;
+    // Default autoCompact to true unless useConversations is on (where it
+    // doesn't apply — server-side history management).
+    this.autoCompact = options.autoCompact ?? !this.useConversations;
 
     const parentTools = options.tools ?? [];
     this.hasTodoTool = parentTools.some((t) => t.native?.openai === 'todo');
