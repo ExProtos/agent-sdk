@@ -8,11 +8,13 @@ import { MockLanguageModelV3, convertArrayToReadableStream } from 'ai/test';
 
 import {
   VercelBackend,
+  findLatestTodoInput,
   formatTodos,
   runSubAgent,
   translatePart,
   vercel,
 } from '../../../src/backends/vercel/index';
+import type { UIMessage } from 'ai';
 import { readUIMessages } from '../../../src/persistence';
 import * as builtin from '../../../src/tools/builtin';
 import type { AgentEvent } from '../../../src/types';
@@ -537,5 +539,158 @@ describe('VercelBackend todo tool wiring', () => {
     const types = events.map((e) => e.type);
     expect(types[0]).toBe('session_start');
     expect(types[types.length - 1]).toBe('session_end');
+  });
+});
+
+// ── findLatestTodoInput ──
+
+function todoToolPart(input: unknown, toolCallId: string): UIMessage['parts'][number] {
+  return {
+    type: 'tool-todo',
+    toolCallId,
+    state: 'output-available',
+    input: input as never,
+    output: 'todos updated' as never,
+  } as UIMessage['parts'][number];
+}
+
+describe('findLatestTodoInput', () => {
+  it('returns undefined for an empty array', () => {
+    expect(findLatestTodoInput([])).toBeUndefined();
+  });
+
+  it('returns undefined when no todo tool calls are present', () => {
+    const messages: UIMessage[] = [
+      { id: 'u1', role: 'user', parts: [{ type: 'text', text: 'hi' }] },
+      { id: 'a1', role: 'assistant', parts: [{ type: 'text', text: 'hello', state: 'done' }] },
+    ];
+    expect(findLatestTodoInput(messages)).toBeUndefined();
+  });
+
+  it('returns the input from the only todo call', () => {
+    const todoInput = { text: 'do the thing' };
+    const messages: UIMessage[] = [
+      { id: 'u1', role: 'user', parts: [{ type: 'text', text: 'hi' }] },
+      {
+        id: 'a1',
+        role: 'assistant',
+        parts: [todoToolPart(todoInput, 'tc-1')],
+      },
+    ];
+    expect(findLatestTodoInput(messages)).toEqual(todoInput);
+  });
+
+  it('returns the most recent of multiple todo calls', () => {
+    const first = { text: 'plan v1' };
+    const second = { text: 'plan v2' };
+    const third = { text: 'plan v3' };
+    const messages: UIMessage[] = [
+      { id: 'a1', role: 'assistant', parts: [todoToolPart(first, 'tc-1')] },
+      { id: 'a2', role: 'assistant', parts: [todoToolPart(second, 'tc-2')] },
+      { id: 'a3', role: 'assistant', parts: [todoToolPart(third, 'tc-3')] },
+    ];
+    expect(findLatestTodoInput(messages)).toEqual(third);
+  });
+
+  it('finds a todo call interleaved with other parts in the same message', () => {
+    const todoInput = {
+      todos: [{ content: 'task A', status: 'pending', activeForm: 'doing A' }],
+    };
+    const messages: UIMessage[] = [
+      {
+        id: 'a1',
+        role: 'assistant',
+        parts: [
+          { type: 'text', text: 'first', state: 'done' },
+          { type: 'step-start' },
+          todoToolPart(todoInput, 'tc-1'),
+          { type: 'text', text: 'after', state: 'done' },
+        ],
+      },
+    ];
+    expect(findLatestTodoInput(messages)).toEqual(todoInput);
+  });
+
+  it('ignores user messages even if they contain odd parts', () => {
+    const messages: UIMessage[] = [
+      // Synthetic user msg with a tool-todo part — shouldn't ever happen
+      // in practice, but we should ignore by role.
+      {
+        id: 'u1',
+        role: 'user',
+        parts: [todoToolPart({ text: 'should be ignored' }, 'tc-x')],
+      },
+    ];
+    expect(findLatestTodoInput(messages)).toBeUndefined();
+  });
+});
+
+// ── reload-from-JSONL integration ──
+
+describe('VercelBackend todo reload from JSONL', () => {
+  it('recovers todos from disk on cache-miss and injects them via prepareStep', async () => {
+    const dir = freshSessionsDir();
+
+    // First backend: write a turn so the JSONL exists with a continuation.
+    const backendA = vercel({
+      model: echoModel(),
+      sessionsDir: dir,
+      tools: [builtin.todo],
+    });
+    const eventsA = await drainEvents(backendA, 'first turn');
+    const continuation = (eventsA[0] as Extract<AgentEvent, { type: 'session_start' }>)
+      .continuation;
+    const filePath = path.join(dir, `${continuation}.jsonl`);
+
+    // Synthesize a tool-todo entry directly (bypasses needing a mock model
+    // that actually calls the tool).
+    const expectedTodos = { text: 'remember to ship the thing' };
+    const synthetic: UIMessage = {
+      id: 'a-synth',
+      role: 'assistant',
+      parts: [todoToolPart(expectedTodos, 'tc-synth')],
+    };
+    fs.appendFileSync(filePath, JSON.stringify(synthetic) + '\n');
+
+    // Second backend: fresh in-memory cache. Use a model whose call options
+    // we can inspect after the fact, so we can verify prepareStep injected
+    // the recovered todos into the system prompt.
+    const recordingModel = new MockLanguageModelV3({
+      doStream: async () => ({
+        stream: convertArrayToReadableStream([
+          { type: 'stream-start', warnings: [] },
+          { type: 'text-start', id: 'r' },
+          { type: 'text-delta', id: 'r', delta: 'ack' },
+          { type: 'text-end', id: 'r' },
+          {
+            type: 'finish',
+            usage: {
+              inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
+              outputTokens: { total: 1, text: 1, reasoning: 0 },
+              totalTokens: 2,
+            },
+            finishReason: { unified: 'stop', raw: 'stop' },
+          },
+        ]),
+      }),
+    });
+    const backendB = vercel({
+      model: recordingModel,
+      sessionsDir: dir,
+      tools: [builtin.todo],
+    });
+    await drainEvents2(backendB, 'second turn', continuation);
+
+    // Verify the model received a system message that includes the recovered
+    // todos — proves the reload path populated todosByContinuation AND
+    // prepareStep read it back into the prompt.
+    expect(recordingModel.doStreamCalls.length).toBeGreaterThan(0);
+    const lastCall = recordingModel.doStreamCalls[recordingModel.doStreamCalls.length - 1]!;
+    const systemMessages = lastCall.prompt.filter((m) => m.role === 'system');
+    const systemText = systemMessages
+      .map((m) => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content)))
+      .join('\n');
+    expect(systemText).toContain('Current todos:');
+    expect(systemText).toContain('remember to ship the thing');
   });
 });

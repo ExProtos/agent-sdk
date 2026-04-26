@@ -37,6 +37,7 @@ import {
   type StopCondition,
   type TextStreamPart,
   type ToolSet,
+  type UIMessage,
 } from 'ai';
 
 import type {
@@ -211,6 +212,14 @@ export class VercelBackend implements Backend {
         const stored = readUIMessages(persistPath);
         history = stored.length > 0 ? await convertToModelMessages(stored) : [];
         histories.set(continuation, history);
+        // Reconstruct todos from the same JSONL we just loaded — single
+        // source of truth (no sidecar file). The JSONL already contains
+        // every prior `todo` tool call as a tool-todo UIMessagePart;
+        // walk it to find the latest input.
+        if (hasTodoTool && !todosByContinuation.has(continuation)) {
+          const recovered = findLatestTodoInput(stored);
+          if (recovered !== undefined) todosByContinuation.set(continuation, recovered);
+        }
       }
 
       // Append the inbound user message and persist as a UIMessage.
@@ -443,6 +452,37 @@ export async function runSubAgent(
 }
 
 // ── Helpers ──
+
+/**
+ * Walk a UIMessage[] (most recently appended last) backwards looking for
+ * the most recent `tool-todo` part with a settled `input`. Used on
+ * cache-miss reload so the prepareStep injection survives process
+ * restarts without a separate sidecar file — the JSONL is the single
+ * source of truth.
+ *
+ * Returns the recovered tool input (the same shape that was passed
+ * to the `todo` tool's execute originally), or undefined if no todo
+ * call appears in the history.
+ */
+export function findLatestTodoInput(messages: UIMessage[]): unknown {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i]!;
+    if (msg.role !== 'assistant') continue;
+    for (let j = msg.parts.length - 1; j >= 0; j--) {
+      const part = msg.parts[j]!;
+      if (
+        typeof part === 'object' &&
+        part !== null &&
+        'type' in part &&
+        (part as { type: string }).type === 'tool-todo'
+      ) {
+        const p = part as { input?: unknown };
+        if (p.input !== undefined) return p.input;
+      }
+    }
+  }
+  return undefined;
+}
 
 /**
  * Render the most recent `todo` tool input into a human-readable string
