@@ -12,22 +12,16 @@ export const hasAnthropicAuth =
 export const hasAnthropicApiKey = !!process.env.ANTHROPIC_API_KEY;
 
 /**
- * Env override for the Claude backend that prefers `CLAUDE_CODE_OAUTH_TOKEN`
- * when both it and `ANTHROPIC_API_KEY` are set. Returns an env dict with
- * `ANTHROPIC_API_KEY` stripped so the SDK only sees the OAuth credential
- * (which routes through the user's Pro/Max subscription instead of metered
- * API billing).
- *
- * Returns `undefined` when there's nothing to override — caller can spread
- * the result conditionally without juggling defaults.
+ * Returns the OAuth token when env has both `CLAUDE_CODE_OAUTH_TOKEN` and
+ * `ANTHROPIC_API_KEY` set, so the test prefers Pro/Max subscription auth
+ * over metered API billing. Returns undefined otherwise — caller spreads
+ * `{ oauthToken: claudeOAuthPreferredToken() }` conditionally.
  */
-export function claudeOAuthPreferredEnv(): Record<string, string | undefined> | undefined {
+export function claudeOAuthPreferredToken(): string | undefined {
   if (!process.env.CLAUDE_CODE_OAUTH_TOKEN || !process.env.ANTHROPIC_API_KEY) {
     return undefined;
   }
-  const env = { ...process.env } as Record<string, string | undefined>;
-  delete env.ANTHROPIC_API_KEY;
-  return env;
+  return process.env.CLAUDE_CODE_OAUTH_TOKEN;
 }
 
 /**
