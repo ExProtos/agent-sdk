@@ -251,7 +251,7 @@ Per-tool details are in [tools.md](tools.md).
 | Persistence | SDK-native (`~/.claude/projects/`) | SDK-native (`~/.codex/sessions/` + sqlite index) | We own it (UIMessage[] JSONL — see Persistence below) | Memory-only by default; opt-in JSONL via `sessionsDir` (our `JsonlSession` impl, AgentInputItem[]); opt-in OpenAI Conversations |
 | Auto-compaction | SDK-native (Claude SDK summarizes when context fills) | AppServer-native (Codex auto-compacts on its own threshold) | In-backend — between turns, when `inputTokens / contextWindow >= contextThreshold`. Default on. Hardcoded model→context-window table; `contextWindow` override for unknown models. | Default on for non-Conversations sessions: wraps the Session in `OpenAIResponsesCompactionSession`, which calls OpenAI's `responses.compact` API and rewrites local items in place. Silently disabled when `useConversations: true` (server-side history management). |
 
-Per-backend wire details are in [backends/claude.md](backends/claude.md), [backends/codex.md](backends/codex.md), [backends/vercel.md](backends/vercel.md), and [backends/openai-agents.md](backends/openai-agents.md).
+Per-backend wire details are in [backends/claude.md](backends/claude.md), [backends/codex.md](backends/codex.md), [backends/vercel.md](backends/vercel.md), and [backends/openai.md](backends/openai.md).
 
 ## Custom tools across backends
 
@@ -363,7 +363,7 @@ The Codex backend explicitly verifies auth on each `query()` by calling `account
 - ✅ Claude Agent SDK backend — native tools + custom tools via SDK in-process MCP; `*_end`-only events
 - ✅ Codex AppServer backend — native tools + custom tools via subprocess MCP bridge; streaming deltas; native browsing → canonical `webSearch`/`webFetch` events
 - ✅ Vercel AI SDK backend — provider-agnostic model selection (incl. local via openai-compatible); JSONL persistence (UIMessage) with auto-reload; sub-agent (`task`) and todo state (with `prepareStep` injection) implemented in-backend
-- ✅ OpenAI Agents SDK backend — see [backends/openai-agents.md](backends/openai-agents.md). Separate from Codex; adds OpenAI's hosted tools (Code Interpreter, Computer Use, file_search, web_search, image_generation) and built-in tracing for API-key users. JSONL persistence via SDK's `Session` interface; opt-in Conversations API and auto-compaction.
+- ✅ OpenAI Agents SDK backend — see [backends/openai.md](backends/openai.md). Separate from Codex; adds OpenAI's hosted tools (Code Interpreter, Computer Use, file_search, web_search, image_generation) and built-in tracing for API-key users. JSONL persistence via SDK's `Session` interface; opt-in Conversations API and auto-compaction.
 
 Open follow-ups (see `docs/todo.md`):
 - Codex tool disabling via TOML config passthrough

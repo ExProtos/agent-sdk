@@ -2,7 +2,7 @@
  * Factories for OpenAI's hosted tools — web search, file search, code
  * interpreter, computer use, image generation. Each one wraps the
  * corresponding `@openai/agents` factory and stashes the resulting SDK
- * tool object in `Tool.native.openai` so the openai-agents backend
+ * tool object in `Tool.native.openai` so the openai backend
  * forwards it directly into the underlying Agent.
  *
  * Use these when you need to customize a hosted tool's options

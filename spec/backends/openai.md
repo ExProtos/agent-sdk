@@ -2,18 +2,18 @@
 
 Wraps `@openai/agents` (npm) — OpenAI's official multi-agent framework. Separate from the Codex backend even though both target OpenAI models: this one is the API-key path with hosted tools (web_search, file_search, code_interpreter, computer_use, image_generation) and built-in tracing; Codex is the ChatGPT-subscription path with `codex app-server`.
 
-Implementation: `src/backends/openai-agents/`. Two files:
+Implementation: `src/backends/openai/`. Two files:
 
 ```
-src/backends/openai-agents/
-  index.ts        # OpenAIAgentsBackend, openaiAgents(), event translation, JsonlSession
+src/backends/openai/
+  index.ts        # OpenAIBackend, openai(), event translation, JsonlSession
   hosted.ts       # hostedTools.* factories — wrap SDK's hosted-tool factories into our Tool shape
 ```
 
 ## Public API
 
 ```typescript
-export interface OpenAIAgentsBackendOptions {
+export interface OpenAIBackendOptions {
   /** Required. OpenAI model name. */
   model: string;
   /**
@@ -58,8 +58,8 @@ export interface OpenAIAgentsBackendOptions {
   autoCompact?: boolean;
 }
 
-export class OpenAIAgentsBackend implements Backend { /* … */ }
-export function openaiAgents(options: OpenAIAgentsBackendOptions): OpenAIAgentsBackend;
+export class OpenAIBackend implements Backend { /* … */ }
+export function openai(options: OpenAIBackendOptions): OpenAIBackend;
 
 export const hostedTools: {
   webSearch(options?: WebSearchToolOptions): Tool;
@@ -88,7 +88,7 @@ Dispatch order at construction time, per parent tool:
 
 ### Hosted tool factories
 
-`src/backends/openai-agents/hosted.ts` wraps the SDK's hosted-tool factories (`webSearchTool`, `fileSearchTool`, `codeInterpreterTool`, `computerTool`, `imageGenerationTool` — all from `@openai/agents-openai`, transitively available through `@openai/agents`) into our `Tool` shape. Use these when you need to customize options (web search location, vector store IDs, computer dimensions). For default-configured hosted tools, the canonical builtins (`tools.webSearch`) already declare a string `native.openai` marker and the backend lazy-constructs the SDK tool — no factory call needed.
+`src/backends/openai/hosted.ts` wraps the SDK's hosted-tool factories (`webSearchTool`, `fileSearchTool`, `codeInterpreterTool`, `computerTool`, `imageGenerationTool` — all from `@openai/agents-openai`, transitively available through `@openai/agents`) into our `Tool` shape. Use these when you need to customize options (web search location, vector store IDs, computer dimensions). For default-configured hosted tools, the canonical builtins (`tools.webSearch`) already declare a string `native.openai` marker and the backend lazy-constructs the SDK tool — no factory call needed.
 
 ```typescript
 export const hostedTools = {
@@ -140,7 +140,7 @@ Other backends ignore `native.openai`. A user who puts `hostedTools.codeInterpre
 ## Construction
 
 ```typescript
-constructor(options: OpenAIAgentsBackendOptions) {
+constructor(options: OpenAIBackendOptions) {
   if (options.useConversations && options.sessionsDir) {
     throw new Error('useConversations and sessionsDir are mutually exclusive');
   }

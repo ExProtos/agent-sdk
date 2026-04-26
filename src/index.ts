@@ -26,9 +26,9 @@ export {
   type VercelBackendOptions,
 } from './backends/vercel/index';
 export {
-  openaiAgents,
-  OpenAIAgentsBackend,
-  type OpenAIAgentsBackendOptions,
-} from './backends/openai-agents/index';
-export * as hostedTools from './backends/openai-agents/hosted';
+  openai,
+  OpenAIBackend,
+  type OpenAIBackendOptions,
+} from './backends/openai/index';
+export * as hostedTools from './backends/openai/hosted';
 export { appendUIMessage, readUIMessages } from './persistence';

@@ -6,20 +6,20 @@ import { z } from 'zod';
 
 import {
   JsonlSession,
-  OpenAIAgentsBackend,
+  OpenAIBackend,
   appendJsonlItems,
   buildOpenAIRunInput,
   combineSystem,
   findLatestTodoInput,
   formatTodos,
-  openaiAgents,
+  openai,
   readJsonlItems,
   rewriteJsonl,
   translateStreamEvent,
   unwrapStoredArgs,
   wrapSchemaForOpenAI,
-} from '../../../src/backends/openai-agents/index';
-import * as hostedTools from '../../../src/backends/openai-agents/hosted';
+} from '../../../src/backends/openai/index';
+import * as hostedTools from '../../../src/backends/openai/hosted';
 import * as builtin from '../../../src/tools/builtin';
 import type { Tool } from '../../../src/tools/types';
 import type { AgentEvent, Attachment } from '../../../src/types';
@@ -506,10 +506,10 @@ describe('translateStreamEvent', () => {
 
 // ── Construction guards ──
 
-describe('OpenAIAgentsBackend construction', () => {
+describe('OpenAIBackend construction', () => {
   it('rejects useConversations + sessionsDir together', () => {
     expect(() =>
-      openaiAgents({
+      openai({
         model: 'gpt-5',
         useConversations: true,
         sessionsDir: '/tmp/s',
@@ -519,7 +519,7 @@ describe('OpenAIAgentsBackend construction', () => {
 
   it('rejects useConversations + autoCompact together', () => {
     expect(() =>
-      openaiAgents({
+      openai({
         model: 'gpt-5',
         useConversations: true,
         autoCompact: true,
@@ -528,8 +528,8 @@ describe('OpenAIAgentsBackend construction', () => {
   });
 
   it('accepts a model and no tools', () => {
-    const backend = openaiAgents({ model: 'gpt-5' });
-    expect(backend.name).toBe('openai-agents');
+    const backend = openai({ model: 'gpt-5' });
+    expect(backend.name).toBe('openai');
   });
 });
 
@@ -542,11 +542,11 @@ describe('tool resolution', () => {
     // Stashed as the SDK tool object under native.openai
     expect(typeof t.native?.openai).toBe('object');
     // Construction succeeds with a hosted tool
-    expect(() => openaiAgents({ model: 'gpt-5', tools: [t] })).not.toThrow();
+    expect(() => openai({ model: 'gpt-5', tools: [t] })).not.toThrow();
   });
 
   it('accepts builtin.webSearch via the string marker (lazy-constructs the SDK hosted tool)', () => {
-    expect(() => openaiAgents({ model: 'gpt-5', tools: [builtin.webSearch] })).not.toThrow();
+    expect(() => openai({ model: 'gpt-5', tools: [builtin.webSearch] })).not.toThrow();
   });
 
   it('skips tools that have no execute and no native/hosted mapping', () => {
@@ -555,24 +555,24 @@ describe('tool resolution', () => {
       description: 'ghost',
       schema: z.object({}),
     };
-    expect(() => openaiAgents({ model: 'gpt-5', tools: [ghost] })).not.toThrow();
+    expect(() => openai({ model: 'gpt-5', tools: [ghost] })).not.toThrow();
   });
 
   it('wires builtin.bash via execute', () => {
-    expect(() => openaiAgents({ model: 'gpt-5', tools: [builtin.bash] })).not.toThrow();
+    expect(() => openai({ model: 'gpt-5', tools: [builtin.bash] })).not.toThrow();
   });
 
   it('special-cases the task tool', () => {
-    expect(() => openaiAgents({ model: 'gpt-5', tools: [builtin.task] })).not.toThrow();
+    expect(() => openai({ model: 'gpt-5', tools: [builtin.task] })).not.toThrow();
   });
 
   it('special-cases the todo tool', () => {
-    expect(() => openaiAgents({ model: 'gpt-5', tools: [builtin.todo] })).not.toThrow();
+    expect(() => openai({ model: 'gpt-5', tools: [builtin.todo] })).not.toThrow();
   });
 
   it('accepts a mixed catalog (hosted + execute + special)', () => {
     expect(() =>
-      openaiAgents({
+      openai({
         model: 'gpt-5',
         tools: [
           builtin.bash,

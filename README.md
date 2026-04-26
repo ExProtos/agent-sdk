@@ -64,7 +64,7 @@ await agent.close();
 Swap the backend with no other changes:
 
 ```typescript
-import { codex, vercel, openaiAgents, hostedTools } from 'agent-sdk';
+import { codex, vercel, openai, hostedTools } from 'agent-sdk';
 import { anthropic } from '@ai-sdk/anthropic';
 
 // Codex (subscription or OPENAI_API_KEY)
@@ -75,7 +75,7 @@ new Agent({ backend: vercel({ model: anthropic('claude-sonnet-4-5'), tools: tool
 
 // OpenAI Agents — adds hosted tools
 new Agent({
-  backend: openaiAgents({
+  backend: openai({
     model: 'gpt-5-mini',
     tools: [...tools.all, hostedTools.codeInterpreter()],
   }),
@@ -136,9 +136,9 @@ vercel({ model, tools: myTools });
 The OpenAI Agents backend can dispatch hosted tools server-side (web search, code interpreter, file search, computer use, image generation):
 
 ```typescript
-import { openaiAgents, hostedTools, tools } from 'agent-sdk';
+import { openai, hostedTools, tools } from 'agent-sdk';
 
-openaiAgents({
+openai({
   model: 'gpt-5',
   tools: [
     ...tools.all,

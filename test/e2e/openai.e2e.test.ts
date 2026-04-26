@@ -11,7 +11,7 @@ import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
-import { Agent, openaiAgents, hostedTools, tools, type Tool } from '../../src/index';
+import { Agent, openai, hostedTools, tools, type Tool } from '../../src/index';
 import {
   assembledText,
   collectEvents,
@@ -19,18 +19,18 @@ import {
   hasOpenAIApiKey,
   toolCalls,
 } from './helpers';
-import { readJsonlItems } from '../../src/backends/openai-agents/index';
+import { readJsonlItems } from '../../src/backends/openai/index';
 
 const MODEL = 'gpt-5-mini';
 
 function freshSessionsDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'openai-agents-e2e-'));
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'openai-e2e-'));
 }
 
 describe.skipIf(!hasOpenAIApiKey)('OpenAI Agents end-to-end', () => {
   it('completes a trivial query and emits a coherent event sequence', async () => {
     const agent = new Agent({
-      backend: openaiAgents({ model: MODEL }),
+      backend: openai({ model: MODEL }),
     });
     try {
       const query = agent.run({
@@ -68,7 +68,7 @@ describe.skipIf(!hasOpenAIApiKey)('OpenAI Agents end-to-end', () => {
     };
 
     const agent = new Agent({
-      backend: openaiAgents({ model: MODEL, tools: [currentTime] }),
+      backend: openai({ model: MODEL, tools: [currentTime] }),
     });
     try {
       const query = agent.run({
@@ -95,7 +95,7 @@ describe.skipIf(!hasOpenAIApiKey)('OpenAI Agents end-to-end', () => {
     const sessionsDir = freshSessionsDir();
 
     const agentA = new Agent({
-      backend: openaiAgents({ model: MODEL, sessionsDir }),
+      backend: openai({ model: MODEL, sessionsDir }),
     });
     let continuation: string | undefined;
     try {
@@ -115,7 +115,7 @@ describe.skipIf(!hasOpenAIApiKey)('OpenAI Agents end-to-end', () => {
     }
 
     const agentB = new Agent({
-      backend: openaiAgents({ model: MODEL, sessionsDir }),
+      backend: openai({ model: MODEL, sessionsDir }),
     });
     try {
       const q = agentB.run({
@@ -132,7 +132,7 @@ describe.skipIf(!hasOpenAIApiKey)('OpenAI Agents end-to-end', () => {
 
   it('runs a hosted webSearch tool when included via hostedTools.webSearch()', async () => {
     const agent = new Agent({
-      backend: openaiAgents({
+      backend: openai({
         model: MODEL,
         tools: [hostedTools.webSearch()],
       }),

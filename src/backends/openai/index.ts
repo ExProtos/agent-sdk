@@ -62,7 +62,7 @@ import type { Tool } from '../../tools/types';
 
 // ── Public API ──
 
-export interface OpenAIAgentsBackendOptions {
+export interface OpenAIBackendOptions {
   /** Required. OpenAI model name (e.g. 'gpt-5', 'gpt-4.1'). */
   model: string;
   /**
@@ -113,8 +113,8 @@ const ZERO_USAGE: TokenUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 
 const STALE_SESSION_RE =
   /conversation.*not found|session.*not found|no such (conversation|session)/i;
 
-export class OpenAIAgentsBackend implements Backend {
-  readonly name = 'openai-agents';
+export class OpenAIBackend implements Backend {
+  readonly name = 'openai';
 
   private readonly model: string;
   private readonly instructions: string | undefined;
@@ -131,10 +131,10 @@ export class OpenAIAgentsBackend implements Backend {
   private readonly todosByContinuation = new Map<string, unknown>();
   private readonly sessions = new Map<string, Session>();
 
-  constructor(options: OpenAIAgentsBackendOptions) {
+  constructor(options: OpenAIBackendOptions) {
     if (options.useConversations && options.sessionsDir !== undefined) {
       throw new Error(
-        'OpenAIAgentsBackend: useConversations and sessionsDir are mutually exclusive',
+        'OpenAIBackend: useConversations and sessionsDir are mutually exclusive',
       );
     }
     // Only throw when the caller explicitly sets autoCompact: true alongside
@@ -143,7 +143,7 @@ export class OpenAIAgentsBackend implements Backend {
     // useConversations is on (Conversations manages history server-side).
     if (options.useConversations && options.autoCompact === true) {
       throw new Error(
-        'OpenAIAgentsBackend: useConversations and autoCompact are mutually exclusive',
+        'OpenAIBackend: useConversations and autoCompact are mutually exclusive',
       );
     }
 
@@ -422,8 +422,8 @@ export class OpenAIAgentsBackend implements Backend {
   }
 }
 
-export function openaiAgents(options: OpenAIAgentsBackendOptions): OpenAIAgentsBackend {
-  return new OpenAIAgentsBackend(options);
+export function openai(options: OpenAIBackendOptions): OpenAIBackend {
+  return new OpenAIBackend(options);
 }
 
 // ── JsonlSession (our local Session impl) ──
