@@ -1,33 +1,47 @@
 /**
  * Claude backend — delegates the agent loop to @anthropic-ai/claude-agent-sdk.
  *
- * v0 scope:
- * - Native tools only (Tool.native.claude → allowedTools)
- * - Tools without `native.claude` are silently skipped (in-process MCP
- *   registration for custom tools is a future addition; on Codex they
- *   route through the MCP bridge instead)
- * - Coarse event translation: complete content blocks (text/thinking/tool_use)
- *   surface as text_end / thinking_end / tool_call_end events; no streaming
- *   deltas yet
- * - Auth: caller's responsibility (CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY
- *   in the environment)
+ * Tool resolution:
+ *   - Tools with `native.claude` set → registered via `allowedTools`. The SDK
+ *     uses its built-in implementation; our `execute` is not called.
+ *   - Tools with `execute` and no `native.claude` and a `z.object()` schema →
+ *     bundled into an in-process SDK MCP server (`createSdkMcpServer`). The
+ *     closure runs in the parent process; the wire name on Claude's side is
+ *     `mcp__agent-sdk-tools__<name>` and we map it back to the canonical
+ *     name in event translation.
+ *   - Tools that lack both `native.claude` and a usable `execute` are
+ *     silently skipped. Tools with non-object schemas (unions, arrays) can't
+ *     ride the SDK MCP server today — log to stderr and skip.
+ *
+ * Event translation: complete content blocks (text/thinking/tool_use)
+ * surface as text_end / thinking_end / tool_call_end events; no streaming
+ * deltas yet.
+ *
+ * Auth: caller's responsibility (CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY
+ * in the environment).
  */
 
 import {
+  createSdkMcpServer,
   query as sdkQuery,
+  tool as claudeTool,
   type Options as SDKOptions,
   type SDKMessage,
   type SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk';
+import type { ZodObject, ZodRawShape } from 'zod';
 
 import type { AgentEvent, AgentQuery, Backend, QueryInput } from '../../types';
 import type { Tool } from '../../tools/types';
 
+const MCP_SERVER_NAME = 'agent-sdk-tools';
+
 export interface ClaudeBackendOptions {
   /**
-   * Tools to expose. Only tools with `native.claude` set take effect in v0;
-   * others are silently dropped. (In-process MCP registration for custom
-   * tools on Claude is a future addition.)
+   * Tools to expose. Tools with `native.claude` use the SDK's built-in
+   * implementation; tools with `execute` (and no `native.claude`) are
+   * registered as in-process MCP tools. Tools that satisfy neither
+   * condition are silently skipped.
    */
   tools?: Tool[];
   /**
@@ -92,7 +106,12 @@ export class ClaudeBackend implements Backend {
   private readonly canonicalByWireName: Map<string, string>;
   private readonly sdkOptions: Pick<
     SDKOptions,
-    'permissionMode' | 'systemPrompt' | 'additionalDirectories' | 'env' | 'allowedTools'
+    | 'permissionMode'
+    | 'systemPrompt'
+    | 'additionalDirectories'
+    | 'env'
+    | 'allowedTools'
+    | 'mcpServers'
   >;
 
   constructor(options: ClaudeBackendOptions = {}) {
@@ -100,12 +119,44 @@ export class ClaudeBackend implements Backend {
 
     const allowedTools: string[] = [];
     this.canonicalByWireName = new Map();
+    const customSdkTools: ReturnType<typeof claudeTool>[] = [];
+
     for (const t of this.tools) {
       if (t.native?.claude) {
         allowedTools.push(t.native.claude);
         this.canonicalByWireName.set(t.native.claude, t.name);
+        continue;
       }
+      if (t.execute === undefined) continue; // nothing to register
+      const shape = extractObjectShape(t);
+      if (shape === undefined) {
+        // Non-object schema (union, array, etc.) — Claude's SDK MCP server
+        // requires a raw object shape. Skip with a stderr breadcrumb so the
+        // caller notices.
+        // eslint-disable-next-line no-console
+        console.error(
+          `[claude] tool '${t.name}' has a non-object schema; cannot register as in-process MCP tool. Skipping.`,
+        );
+        continue;
+      }
+      const exec = t.execute;
+      customSdkTools.push(
+        claudeTool(t.name, t.description, shape, async (args, _extra) => {
+          const result = await exec(args);
+          return {
+            content: [{ type: 'text', text: typeof result === 'string' ? result : JSON.stringify(result) }],
+          };
+        }),
+      );
+      const wire = `mcp__${MCP_SERVER_NAME}__${t.name}`;
+      allowedTools.push(wire);
+      this.canonicalByWireName.set(wire, t.name);
     }
+
+    const mcpServers =
+      customSdkTools.length > 0
+        ? { [MCP_SERVER_NAME]: createSdkMcpServer({ name: MCP_SERVER_NAME, tools: customSdkTools }) }
+        : undefined;
 
     this.sdkOptions = {
       ...(options.permissionMode !== undefined && { permissionMode: options.permissionMode }),
@@ -115,6 +166,7 @@ export class ClaudeBackend implements Backend {
       }),
       ...(options.env !== undefined && { env: options.env }),
       ...(allowedTools.length > 0 && { allowedTools }),
+      ...(mcpServers !== undefined && { mcpServers }),
     };
   }
 
@@ -251,4 +303,18 @@ export function* translateMessage(
     };
     return;
   }
+}
+
+/**
+ * Extract a Zod object's raw shape if the schema is z.object(...). Returns
+ * undefined for unions, arrays, primitives, or anything else that doesn't
+ * fit Claude SDK's tool() helper, which requires a raw shape (Record<string,
+ * ZodType>) — not a full ZodType.
+ */
+function extractObjectShape(t: Tool): ZodRawShape | undefined {
+  const schema = t.schema as unknown as Partial<ZodObject<ZodRawShape>>;
+  if (schema && typeof schema === 'object' && 'shape' in schema && typeof schema.shape === 'object') {
+    return schema.shape as ZodRawShape;
+  }
+  return undefined;
 }

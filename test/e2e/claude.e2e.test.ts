@@ -13,7 +13,8 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { Agent, claude, tools } from '../../src/index';
+import { z } from 'zod';
+import { Agent, claude, tools, type Tool } from '../../src/index';
 import {
   assembledText,
   claudeOAuthPreferredEnv,
@@ -83,6 +84,57 @@ describe.skipIf(!hasAnthropicAuth)('Claude end-to-end', () => {
       await agent.close();
     }
   }, 90_000);
+
+  it('routes a custom tool through the in-process SDK MCP server', async () => {
+    let invocations = 0;
+    let lastTimezone: string | undefined;
+
+    const currentTime: Tool = {
+      name: 'currentTime',
+      description: 'Get the current date and time. Optional IANA timezone.',
+      schema: z.object({
+        timezone: z.string().optional(),
+      }),
+      // No native.claude — must register as an SDK MCP tool
+      execute: async ({ timezone }: { timezone?: string }): Promise<string> => {
+        invocations++;
+        lastTimezone = timezone;
+        return `SENTINEL-TIME-VALUE for tz=${timezone ?? 'UTC'}`;
+      },
+    };
+
+    const agent = new Agent({
+      backend: claude({
+        ...claudeOpts,
+        tools: [currentTime],
+        permissionMode: 'bypassPermissions',
+      }),
+    });
+    try {
+      const query = agent.run({
+        message:
+          'Call the currentTime tool with timezone "Asia/Tokyo". Then echo back exactly the value the tool returned.',
+      });
+      const events = await collectEvents(query);
+
+      // The closure ran in OUR process — verify side effects
+      expect(invocations).toBeGreaterThanOrEqual(1);
+      expect(lastTimezone).toBe('Asia/Tokyo');
+
+      // The tool call appears in the event stream with the canonical name,
+      // not the wire name (mcp__agent-sdk-tools__currentTime).
+      const calls = toolCalls(events);
+      const timeCalls = calls.filter((c) => c.name === 'currentTime');
+      expect(timeCalls.length).toBeGreaterThanOrEqual(1);
+      expect(calls.find((c) => c.name.startsWith('mcp__'))).toBeUndefined();
+
+      // The model received the sentinel and echoed it back.
+      const text = assembledText(events);
+      expect(text).toContain('SENTINEL-TIME-VALUE');
+    } finally {
+      await agent.close();
+    }
+  }, 120_000);
 
   it('resumes a thread across two queries via continuation', async () => {
     const agent = new Agent({ backend: claude(claudeOpts) });

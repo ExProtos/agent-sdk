@@ -329,7 +329,7 @@ describe('ClaudeBackend', () => {
     expect(backend.isContinuationInvalid('No conversation found')).toBe(true);
   });
 
-  it('accepts tools with native.claude mapping (silently drops others)', () => {
+  it('accepts tools with native.claude mapping (silently drops execute-less customs)', () => {
     const tools: Tool[] = [
       {
         name: 'bash',
@@ -338,15 +338,57 @@ describe('ClaudeBackend', () => {
         native: { claude: 'Bash' },
       },
       {
-        name: 'someCustomTool',
-        description: 'Custom tool',
+        name: 'someCustomToolNoExec',
+        description: 'Custom tool with no execute',
         schema: z.object({}),
-        // No native.claude — should be silently dropped in v0
+        // No native.claude AND no execute — silently dropped.
       },
     ];
 
-    // Should construct without throwing.
     const backend = claude({ tools });
     expect(backend.name).toBe('claude');
+  });
+
+  it('registers custom tools (with execute, no native.claude) as in-process MCP tools', () => {
+    const customExecute = async ({ tz }: { tz: string }) => `time in ${tz}`;
+    const tools: Tool[] = [
+      {
+        name: 'currentTime',
+        description: 'Return the current time',
+        schema: z.object({ tz: z.string() }),
+        execute: customExecute,
+      },
+    ];
+
+    // Constructing should wire the tool through createSdkMcpServer with the
+    // wire name `mcp__agent-sdk-tools__currentTime` and add it to allowedTools.
+    const backend = claude({ tools });
+    expect(backend.name).toBe('claude');
+    // No way to introspect sdkOptions directly; the e2e test exercises the
+    // round trip end-to-end. Construction not throwing is the smoke check.
+  });
+
+  it('warns and skips tools with non-object schemas (unions, arrays)', () => {
+    // Capture stderr to verify the warning fires.
+    const errs: string[] = [];
+    const origError = console.error;
+    console.error = (msg: unknown) => {
+      errs.push(String(msg));
+    };
+    try {
+      const tools: Tool[] = [
+        {
+          name: 'unionTool',
+          description: 'Has a union schema',
+          schema: z.union([z.object({ a: z.string() }), z.object({ b: z.number() })]),
+          execute: async () => 'unused',
+        },
+      ];
+      const backend = claude({ tools });
+      expect(backend.name).toBe('claude');
+      expect(errs.some((e) => e.includes('non-object schema') && e.includes('unionTool'))).toBe(true);
+    } finally {
+      console.error = origError;
+    }
   });
 });
