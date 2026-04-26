@@ -46,6 +46,17 @@ export interface ClaudeBackendOptions {
    */
   tools?: Tool[];
   /**
+   * Model alias (e.g. 'sonnet', 'opus', 'haiku') or full model ID
+   * (e.g. 'claude-opus-4-7'). If omitted, the SDK uses its default.
+   */
+  model?: SDKOptions['model'];
+  /**
+   * Reasoning effort: 'low' | 'medium' | 'high' | 'xhigh' | 'max'.
+   * Works with adaptive thinking to guide thinking depth. If omitted,
+   * the SDK uses its default ('high').
+   */
+  effort?: SDKOptions['effort'];
+  /**
    * Permission mode. SDK default is to prompt; we don't bake in
    * `bypassPermissions`. Callers running unattended must opt in explicitly.
    */
@@ -112,6 +123,8 @@ export class ClaudeBackend implements Backend {
   private readonly wrappedToolNames: Set<string>;
   private readonly sdkOptions: Pick<
     SDKOptions,
+    | 'model'
+    | 'effort'
     | 'permissionMode'
     | 'systemPrompt'
     | 'additionalDirectories'
@@ -160,6 +173,8 @@ export class ClaudeBackend implements Backend {
         : undefined;
 
     this.sdkOptions = {
+      ...(options.model !== undefined && { model: options.model }),
+      ...(options.effort !== undefined && { effort: options.effort }),
       ...(options.permissionMode !== undefined && { permissionMode: options.permissionMode }),
       ...(options.systemPrompt !== undefined && { systemPrompt: options.systemPrompt }),
       ...(options.additionalDirectories !== undefined && {

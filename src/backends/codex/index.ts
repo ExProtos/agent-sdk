@@ -36,10 +36,22 @@ import type {
   UserInput,
 } from './protocol';
 
+/**
+ * Reasoning effort accepted by Codex's `model_reasoning_effort` config key.
+ * Source: `codex -c model_reasoning_effort=…` validates against this set.
+ */
+export type CodexEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+
 export interface CodexBackendOptions extends CodexClientOptions {
   tools?: Tool[];
   /** Override Codex's model selection. */
   model?: string;
+  /**
+   * Reasoning effort. Forwarded to Codex as the `model_reasoning_effort`
+   * config override on `thread/start`. If omitted, Codex's user/system
+   * config default applies.
+   */
+  effort?: CodexEffort;
   /** Append to Codex's developer instructions (similar to systemPromptAppend). */
   developerInstructions?: string;
 }
@@ -60,6 +72,7 @@ export class CodexBackend implements Backend {
 
   private readonly clientOptions: CodexClientOptions;
   private readonly model: string | undefined;
+  private readonly effort: CodexEffort | undefined;
   private readonly developerInstructions: string | undefined;
   /**
    * Tools that will be routed through the MCP bridge — i.e. those with an
@@ -71,9 +84,10 @@ export class CodexBackend implements Backend {
   private bridgeConfig: BridgeConfig | null = null;
 
   constructor(options: CodexBackendOptions = {}) {
-    const { tools, model, developerInstructions, ...client } = options;
+    const { tools, model, effort, developerInstructions, ...client } = options;
     this.clientOptions = client;
     this.model = model;
+    this.effort = effort;
     this.developerInstructions = developerInstructions;
 
     // Bridge-eligible: has execute() and no native.codex (Codex's built-in
@@ -146,7 +160,7 @@ export class CodexBackend implements Backend {
           translateNotification(notif, activeThreadId, queue),
         );
 
-        const codexConfig = buildCodexConfig(bridgeConfig);
+        const codexConfig = buildCodexConfig(bridgeConfig, this.effort);
 
         // Start or resume thread.
         if (input.continuation) {
@@ -513,15 +527,19 @@ function shimSpawn(): { command: string; args: string[] } {
 }
 
 /**
- * Build the Codex config blob to pass to thread/start. Currently only
- * registers the MCP bridge server; returns null when there are no custom
- * tools (so thread/start gets no config override at all).
+ * Build the Codex config blob to pass to thread/start. Folds in the MCP
+ * bridge (when there are custom tools) and `model_reasoning_effort` (when
+ * the caller set `effort`). Returns null when there's nothing to override
+ * — so thread/start sends no `config` field at all.
  */
-function buildCodexConfig(bridge: BridgeConfig | null): Record<string, unknown> | null {
-  if (!bridge) return null;
-  const spawn = shimSpawn();
-  return {
-    mcp_servers: {
+function buildCodexConfig(
+  bridge: BridgeConfig | null,
+  effort: CodexEffort | undefined,
+): Record<string, unknown> | null {
+  const config: Record<string, unknown> = {};
+  if (bridge) {
+    const spawn = shimSpawn();
+    config.mcp_servers = {
       'agent-sdk': {
         command: spawn.command,
         args: spawn.args,
@@ -530,8 +548,10 @@ function buildCodexConfig(bridge: BridgeConfig | null): Record<string, unknown> 
           AGENT_SDK_MANIFEST: JSON.stringify(bridge.manifest),
         },
       },
-    },
-  };
+    };
+  }
+  if (effort !== undefined) config.model_reasoning_effort = effort;
+  return Object.keys(config).length > 0 ? config : null;
 }
 
 // ── Push-based event queue ──
