@@ -5,6 +5,32 @@ export const hasAnthropicAuth =
   !!process.env.CLAUDE_CODE_OAUTH_TOKEN || !!process.env.ANTHROPIC_API_KEY;
 
 /**
+ * True only if env has a real ANTHROPIC_API_KEY. Distinct from
+ * `hasAnthropicAuth` because `@ai-sdk/anthropic` does not understand
+ * Claude Code's OAuth token format — it only accepts an API key.
+ */
+export const hasAnthropicApiKey = !!process.env.ANTHROPIC_API_KEY;
+
+/**
+ * Env override for the Claude backend that prefers `CLAUDE_CODE_OAUTH_TOKEN`
+ * when both it and `ANTHROPIC_API_KEY` are set. Returns an env dict with
+ * `ANTHROPIC_API_KEY` stripped so the SDK only sees the OAuth credential
+ * (which routes through the user's Pro/Max subscription instead of metered
+ * API billing).
+ *
+ * Returns `undefined` when there's nothing to override — caller can spread
+ * the result conditionally without juggling defaults.
+ */
+export function claudeOAuthPreferredEnv(): Record<string, string | undefined> | undefined {
+  if (!process.env.CLAUDE_CODE_OAUTH_TOKEN || !process.env.ANTHROPIC_API_KEY) {
+    return undefined;
+  }
+  const env = { ...process.env } as Record<string, string | undefined>;
+  delete env.ANTHROPIC_API_KEY;
+  return env;
+}
+
+/**
  * Codex auth is checked at runtime via account/read — we can't pre-detect
  * via env vars alone (ChatGPT OAuth tokens live in ~/.codex/auth.json).
  * Tests that need Codex set AGENT_SDK_CODEX_E2E=1 to opt in explicitly,

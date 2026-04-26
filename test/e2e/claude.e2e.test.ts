@@ -16,15 +16,23 @@ import { describe, expect, it } from 'vitest';
 import { Agent, claude, tools } from '../../src/index';
 import {
   assembledText,
+  claudeOAuthPreferredEnv,
   collectEvents,
   continuationFromEvents,
   hasAnthropicAuth,
   toolCalls,
 } from './helpers';
 
+// When both CLAUDE_CODE_OAUTH_TOKEN and ANTHROPIC_API_KEY are set, prefer
+// OAuth so tests run against the user's Pro/Max subscription instead of
+// metered API billing. Returns undefined when only one is set, in which
+// case the SDK uses whatever's there.
+const oauthEnv = claudeOAuthPreferredEnv();
+const claudeOpts = oauthEnv !== undefined ? { env: oauthEnv } : {};
+
 describe.skipIf(!hasAnthropicAuth)('Claude end-to-end', () => {
   it('completes a trivial query and emits a coherent event sequence', async () => {
-    const agent = new Agent({ backend: claude({}) });
+    const agent = new Agent({ backend: claude(claudeOpts) });
     try {
       const query = agent.run({
         message: 'Reply with exactly the word OK and nothing else.',
@@ -48,6 +56,7 @@ describe.skipIf(!hasAnthropicAuth)('Claude end-to-end', () => {
   it('fires tool_call_end with the canonical name when the model uses a native tool', async () => {
     const agent = new Agent({
       backend: claude({
+        ...claudeOpts,
         tools: [tools.bash],
         permissionMode: 'bypassPermissions',
       }),
@@ -76,7 +85,7 @@ describe.skipIf(!hasAnthropicAuth)('Claude end-to-end', () => {
   }, 90_000);
 
   it('resumes a thread across two queries via continuation', async () => {
-    const agent = new Agent({ backend: claude({}) });
+    const agent = new Agent({ backend: claude(claudeOpts) });
     try {
       const q1 = agent.run({
         message: 'Remember the magic number is 7. Reply with OK.',
