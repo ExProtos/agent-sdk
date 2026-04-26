@@ -33,7 +33,13 @@ describe('builtin tools', () => {
   });
 
   it('only tools with intentional implementations ship execute()', () => {
-    const expectedExecutes = new Set(['webFetch']);
+    // Tools with in-process implementations (used by the Vercel backend
+    // and by Codex's MCP bridge for tools that lack a `native.codex`).
+    // webSearch needs an external API + key, todo and task have no clean
+    // out-of-backend semantics, so they stay execute-less for now.
+    const expectedExecutes = new Set([
+      'bash', 'read', 'write', 'edit', 'glob', 'grep', 'webFetch',
+    ]);
     for (const tool of all) {
       const has = typeof tool.execute === 'function';
       const expected = expectedExecutes.has(tool.name);

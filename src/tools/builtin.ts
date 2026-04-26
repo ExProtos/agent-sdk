@@ -23,6 +23,7 @@ export const bash: Tool = {
     claude: 'Bash',
     codex: 'command/exec',
   },
+  execute: impl.bash,
 };
 
 export const read: Tool = {
@@ -37,6 +38,7 @@ export const read: Tool = {
     claude: 'Read',
     codex: 'fs/readFile',
   },
+  execute: impl.read,
 };
 
 export const write: Tool = {
@@ -50,6 +52,7 @@ export const write: Tool = {
     claude: 'Write',
     codex: 'fs/writeFile',
   },
+  execute: impl.write,
 };
 
 /**
@@ -81,6 +84,7 @@ export const edit: Tool = {
     claude: 'Edit',
     codex: 'apply_patch',
   },
+  execute: impl.edit,
 };
 
 /**
@@ -102,6 +106,7 @@ export const glob: Tool = {
     claude: 'Glob',
     codex: 'command/exec',
   },
+  execute: impl.glob,
 };
 
 /**
@@ -122,6 +127,7 @@ export const grep: Tool = {
     claude: 'Grep',
     codex: 'command/exec',
   },
+  execute: impl.grep,
 };
 
 /**
