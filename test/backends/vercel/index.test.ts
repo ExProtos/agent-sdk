@@ -260,6 +260,87 @@ describe('VercelBackend.query', () => {
     expect(end.stopReason).toBe('stop');
   });
 
+  it('runs a multi-step tool loop by default (catches stopWhen=stepCountIs(1) regression)', async () => {
+    // Regression: streamText defaults to stepCountIs(1), which would stop the
+    // tool loop after the first tool result instead of continuing to a final
+    // answer. The Vercel backend applies stepCountIs(20) as its default. To
+    // verify, build a model whose first call emits a tool call and whose
+    // second call emits final text. Without the default, only one doStream
+    // call would happen (the loop would terminate after the first step).
+    let callIndex = 0;
+    const recordingModel = new MockLanguageModelV3({
+      doStream: async () => {
+        const i = callIndex++;
+        if (i === 0) {
+          // First call: model decides to use the tool.
+          return {
+            stream: convertArrayToReadableStream([
+              { type: 'stream-start', warnings: [] },
+              {
+                type: 'tool-call',
+                toolCallId: 'tc-1',
+                toolName: 'noop',
+                input: '{}',
+              },
+              {
+                type: 'finish',
+                usage: {
+                  inputTokens: { total: 5, noCache: 5, cacheRead: 0, cacheWrite: 0 },
+                  outputTokens: { total: 1, text: 1, reasoning: 0 },
+                  totalTokens: 6,
+                },
+                finishReason: { unified: 'tool-calls', raw: 'tool_use' },
+              },
+            ]),
+          };
+        }
+        // Second call (only reached if the loop continues past the tool result):
+        // emit final text.
+        return {
+          stream: convertArrayToReadableStream([
+            { type: 'stream-start', warnings: [] },
+            { type: 'text-start', id: 'final' },
+            { type: 'text-delta', id: 'final', delta: 'all done' },
+            { type: 'text-end', id: 'final' },
+            {
+              type: 'finish',
+              usage: {
+                inputTokens: { total: 6, noCache: 6, cacheRead: 0, cacheWrite: 0 },
+                outputTokens: { total: 2, text: 2, reasoning: 0 },
+                totalTokens: 8,
+              },
+              finishReason: { unified: 'stop', raw: 'stop' },
+            },
+          ]),
+        };
+      },
+    });
+
+    const noopTool: Tool = {
+      name: 'noop',
+      description: 'a tool that does nothing',
+      schema: z.object({}),
+      execute: async () => 'result',
+    };
+
+    const backend = vercel({
+      model: recordingModel,
+      sessionsDir: freshSessionsDir(),
+      tools: [noopTool],
+    });
+    const events = await drainEvents(backend, 'use the tool then answer');
+
+    // Two doStream calls means the loop continued past the first step.
+    expect(recordingModel.doStreamCalls.length).toBe(2);
+
+    // And the final text from the second step made it through to the events.
+    const text = events
+      .filter((e): e is Extract<AgentEvent, { type: 'text_end' }> => e.type === 'text_end')
+      .map((e) => e.text)
+      .join('');
+    expect(text).toBe('all done');
+  });
+
   it('reuses continuation across queries to grow message history', async () => {
     const backend = vercel({ model: echoModel(), sessionsDir: freshSessionsDir() });
 

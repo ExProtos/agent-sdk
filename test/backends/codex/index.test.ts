@@ -709,19 +709,32 @@ describe('translateNotification', () => {
     expect(events.map((e) => e.type)).toEqual(['activity', 'text_delta']);
   });
 
-  it('emits error event on error notification', async () => {
+  it('emits error event followed by terminal session_end on error notification', async () => {
+    // Regression: previously a standalone `error` notification queued only the
+    // error event and left the queue open. Combined with the events generator
+    // returning on `error`, that dropped the spec-promised terminal session_end
+    // — and worse, callers waiting on the iterator could hang. Now error
+    // notifications also queue session_end and end the queue.
     const q = new EventQueue();
     translateNotification(
       { method: 'error', params: { message: 'something exploded' } } as ServerNotification,
       undefined,
       q,
     );
-    q.end();
+    // NOTE: no q.end() here — translateNotification should end the queue
+    // itself for terminal notifications. If it didn't, this for-await would
+    // block forever (and the test would time out).
 
     const events: AgentEvent[] = [];
     for await (const ev of q.iter()) events.push(ev);
 
     expect(events.find((e) => e.type === 'error')).toMatchObject({ message: 'something exploded' });
+    const sessionEnd = events.find((e) => e.type === 'session_end');
+    expect(sessionEnd).toMatchObject({ stopReason: 'error' });
+    // Order: error must precede session_end.
+    const errorIdx = events.findIndex((e) => e.type === 'error');
+    const sessionEndIdx = events.findIndex((e) => e.type === 'session_end');
+    expect(errorIdx).toBeLessThan(sessionEndIdx);
   });
 
   it('emits only activity for unhandled notification methods', async () => {
