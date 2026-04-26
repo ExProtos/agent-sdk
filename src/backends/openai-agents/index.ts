@@ -138,9 +138,10 @@ export class OpenAIAgentsBackend implements Backend {
     this.autoCompact = options.autoCompact ?? false;
 
     const parentTools = options.tools ?? [];
-    this.hasTodoTool = parentTools.some((t) => t.name === 'todo');
+    this.hasTodoTool = parentTools.some((t) => t.native?.openai === 'todo');
     this.subagentToolsFor =
-      options.subagentTools ?? ((_: string) => parentTools.filter((p) => p.name !== 'task'));
+      options.subagentTools
+      ?? ((_: string) => parentTools.filter((p) => p.native?.openai !== 'task'));
 
     const sdkTools = this.buildSdkTools(parentTools);
 
@@ -274,14 +275,14 @@ export class OpenAIAgentsBackend implements Backend {
         this.canonicalByWireName.set(wireName, t.name);
         continue;
       }
-      if (t.name === 'task') {
+      if (t.native?.openai === 'task') {
         out.push(this.buildTaskTool(t));
-        this.canonicalByWireName.set('task', 'task');
+        this.canonicalByWireName.set(t.name, t.name);
         continue;
       }
-      if (t.name === 'todo') {
+      if (t.native?.openai === 'todo') {
         out.push(this.buildTodoTool(t));
-        this.canonicalByWireName.set('todo', 'todo');
+        this.canonicalByWireName.set(t.name, t.name);
         continue;
       }
       if (!t.execute) continue;
@@ -320,7 +321,9 @@ export class OpenAIAgentsBackend implements Backend {
           throw new Error('task tool: input requires a `prompt` string');
         }
         const subagentType = i.subagent_type ?? '';
-        const childTools = subagentToolsFor(subagentType).filter((t) => t.name !== 'task');
+        const childTools = subagentToolsFor(subagentType).filter(
+          (t) => t.native?.openai !== 'task',
+        );
         const childSdkTools: SdkTool[] = [];
         for (const t of childTools) {
           if (t.hosted?.openai !== undefined) {

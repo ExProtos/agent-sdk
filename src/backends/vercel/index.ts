@@ -128,16 +128,16 @@ export class VercelBackend implements Backend {
       options.sessionsDir ?? path.join(process.cwd(), '.agent-sdk', 'sessions');
 
     const parentTools = options.tools ?? [];
-    this.hasTodoTool = parentTools.some((t) => t.name === 'todo');
+    this.hasTodoTool = parentTools.some((t) => t.native?.vercel === 'todo');
     const set: ToolSet = {};
     for (const t of parentTools) {
-      if (t.name === 'task') {
+      if (t.native?.vercel === 'task') {
         // The task tool is contextual — it needs the parent's model and
         // a derived tool subset. Build a closure-bound replacement here
         // rather than calling the canonical execute (which has none).
         const subagentToolsFor =
           options.subagentTools ??
-          ((_: string) => parentTools.filter((p) => p.name !== 'task'));
+          ((_: string) => parentTools.filter((p) => p.native?.vercel !== 'task'));
         const model = this.model;
         const callOptions = () => this.callOptions;
         set[t.name] = vercelTool({
@@ -148,7 +148,7 @@ export class VercelBackend implements Backend {
         });
         continue;
       }
-      if (t.name === 'todo') {
+      if (t.native?.vercel === 'todo') {
         // The todo tool is also contextual — its execute updates a per-
         // continuation map, and prepareStep re-injects the latest todos
         // into the system prompt for every subsequent step. Reads the

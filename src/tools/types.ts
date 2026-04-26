@@ -15,13 +15,17 @@ export interface Tool<TInput = unknown, TOutput = unknown> {
   description: string;
   schema: z.ZodType<TInput>;
   /**
-   * Native tool name on each backend. If set, the backend uses its built-in
-   * implementation and `execute` is not called. If not set, `execute` is
-   * wired up — in-process for Vercel, via the MCP bridge for Codex.
+   * Backend-native tool indicator. If set, the backend handles this tool
+   * itself and `execute` is not called. Value is the backend's wire name
+   * for the tool (Claude/Codex) or the canonical name (Vercel/OpenAI
+   * Agents). A tool with neither `native.<backend>` nor `execute` is
+   * silently dropped on that backend.
    */
   native?: {
     claude?: string;
     codex?: string;
+    vercel?: string;
+    openai?: string;
   };
   /**
    * Backend-hosted tool descriptors. The OpenAI Agents backend recognizes

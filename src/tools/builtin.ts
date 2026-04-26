@@ -205,6 +205,8 @@ export const todo: Tool = {
   native: {
     claude: 'TodoWrite',
     codex: 'plan',
+    vercel: 'todo',
+    openai: 'todo',
   },
 };
 
@@ -239,6 +241,8 @@ export const task: Tool = {
   native: {
     claude: 'Task',
     codex: 'collabAgentToolCall',
+    vercel: 'task',
+    openai: 'task',
   },
 };
 
