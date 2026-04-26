@@ -60,7 +60,7 @@ export async function bash({
       e.signal === 'SIGTERM'
         ? `command timed out after ${timeout ?? DEFAULT_BASH_TIMEOUT_MS}ms`
         : `command failed with exit code ${e.code}`;
-    throw new Error(`${reason}\n${out}`);
+    throw new Error(`${reason}\n${out}`, { cause: err });
   }
 }
 

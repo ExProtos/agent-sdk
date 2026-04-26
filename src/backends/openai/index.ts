@@ -935,7 +935,7 @@ function* translateItemEvent(
       // (e.g. non-streamed path / a model that didn't emit deltas).
       const item = ev.item as { rawItem?: { id?: string; content?: unknown } };
       const id = item.rawItem?.id;
-      let text = '';
+      let text: string;
       if (typeof id === 'string' && textBuf.has(id)) {
         text = textBuf.get(id) ?? '';
         textBuf.delete(id);
@@ -948,7 +948,7 @@ function* translateItemEvent(
     case 'reasoning_item_created': {
       const item = ev.item as { rawItem?: { id?: string; content?: unknown; summary?: unknown } };
       const id = item.rawItem?.id;
-      let text = '';
+      let text: string;
       if (typeof id === 'string' && reasoningBuf.has(id)) {
         text = reasoningBuf.get(id) ?? '';
         reasoningBuf.delete(id);

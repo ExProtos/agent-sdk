@@ -15,7 +15,7 @@
  */
 
 import { connect, type Socket } from 'node:net';
-import { createInterface, type Interface as ReadlineInterface } from 'node:readline';
+import { createInterface } from 'node:readline';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
