@@ -182,6 +182,10 @@ export class ClaudeBackend implements Backend {
       if (t.execute === undefined) continue; // nothing to register
       const { shape, wrapped } = extractToolShape(t);
       if (wrapped) this.wrappedToolNames.add(t.name);
+      // Tool.execute is a function-typed property, not a class method —
+      // there's no `this` to capture. The unbound-method check is a
+      // false positive for our use.
+      // eslint-disable-next-line @typescript-eslint/unbound-method
       const exec = t.execute;
       customSdkTools.push(
         claudeTool(t.name, t.description, shape, async (args, _extra) => {
@@ -353,7 +357,7 @@ export function* translateMessage(
           typeof block.input === 'object' &&
           block.input !== null &&
           'input' in block.input
-            ? (block.input as { input: unknown }).input
+            ? (block.input).input
             : block.input;
         yield {
           type: 'tool_call_end',
@@ -414,9 +418,9 @@ export function* translateMessage(
 function extractToolShape(t: Tool): { shape: ZodRawShape; wrapped: boolean } {
   const schema = t.schema as unknown as Partial<ZodObject<ZodRawShape>>;
   if (schema && typeof schema === 'object' && 'shape' in schema && typeof schema.shape === 'object') {
-    return { shape: schema.shape as ZodRawShape, wrapped: false };
+    return { shape: schema.shape, wrapped: false };
   }
-  return { shape: { input: t.schema } as unknown as ZodRawShape, wrapped: true };
+  return { shape: { input: t.schema }, wrapped: true };
 }
 
 // ── Initial-turn content assembly ──

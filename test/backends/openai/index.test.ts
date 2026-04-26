@@ -6,7 +6,6 @@ import { z } from 'zod';
 
 import {
   JsonlSession,
-  OpenAIBackend,
   appendJsonlItems,
   buildOpenAIRunInput,
   combineSystem,
@@ -378,8 +377,8 @@ describe('translateStreamEvent', () => {
     const textBuf = new Map<string, string>();
     const reasoningBuf = new Map<string, string>();
     const canonicalByWireName = new Map<string, string>();
-    [
-      ...translateStreamEvent(
+    Array.from(
+      translateStreamEvent(
         {
           type: 'raw_model_stream_event',
           data: { type: 'response.output_text.delta', item_id: 'm1', delta: 'hello world' },
@@ -388,7 +387,7 @@ describe('translateStreamEvent', () => {
         textBuf,
         reasoningBuf,
       ),
-    ];
+    );
     const out = [
       ...translateStreamEvent(
         {

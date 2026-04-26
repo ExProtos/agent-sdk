@@ -285,6 +285,10 @@ export const all: Tool[] = [
  */
 export function withImpls(
   base: Tool[],
+  // Each tool's input shape is dictated by its schema; the override closure
+  // mirrors whatever shape the caller put on that tool. `any` lets callers
+  // pass closures typed against the canonical schema without contortions.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   overrides: Record<string, (input: any) => Promise<unknown>>,
 ): Tool[] {
   const byName = new Map(base.map((t) => [t.name, t]));

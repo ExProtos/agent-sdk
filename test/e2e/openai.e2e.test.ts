@@ -11,7 +11,7 @@ import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
-import { Agent, openai, hostedTools, tools, type Tool } from '../../src/index';
+import { Agent, openai, hostedTools, type Tool } from '../../src/index';
 import {
   assembledText,
   collectEvents,

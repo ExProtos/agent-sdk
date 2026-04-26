@@ -33,7 +33,7 @@ async function connectAndCall(
         socket.end();
         resolve(resp);
       } catch (err) {
-        reject(err);
+        reject(err instanceof Error ? err : new Error(String(err)));
       }
     });
     socket.once('error', reject);
@@ -88,7 +88,7 @@ describe('McpBridge', () => {
       for (const m of config.manifest) {
         expect(m.description).toBeTruthy();
         expect(m.inputSchema).toBeTruthy();
-        expect((m.inputSchema as Record<string, unknown>).type).toBe('object');
+        expect((m.inputSchema).type).toBe('object');
       }
     } finally {
       await bridge.stop();

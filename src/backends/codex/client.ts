@@ -185,7 +185,7 @@ export class CodexClient {
       env,
       ...(options.cwd !== undefined && { cwd: options.cwd }),
       stdio: ['pipe', 'pipe', 'pipe'],
-    }) as ChildProcessByStdio<Writable, Readable, Readable>;
+    });
 
     this.lines = createInterface({ input: this.child.stdout });
     this.lines.on('line', (line) => this.handleLine(line));
@@ -287,8 +287,8 @@ export class CodexClient {
       return;
     }
     if ('method' in msg) {
-      if ('id' in msg && (msg as RpcRequest).id !== undefined) {
-        const req = msg as RpcRequest;
+      if ('id' in msg && (msg).id !== undefined) {
+        const req = msg;
         if (this.approvalHandler !== undefined && APPROVAL_DECISION_METHODS.has(req.method)) {
           // Async dispatch — handler may take arbitrary time. We must not
           // block handleLine, so fire-and-forget the await and write the
@@ -300,7 +300,7 @@ export class CodexClient {
         this.write({ id: req.id, result: defaultServerRequestResponse(req.method) });
         return;
       }
-      this.dispatchNotification(msg as RpcNotification);
+      this.dispatchNotification(msg);
     }
   }
 
@@ -335,7 +335,7 @@ export class CodexClient {
   }
 
   private dispatchNotification(n: RpcNotification): void {
-    const notif = { method: n.method, params: n.params } as ServerNotification;
+    const notif = { method: n.method, params: n.params };
     for (const handler of this.notificationHandlers) {
       try {
         handler(notif);

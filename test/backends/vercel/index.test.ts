@@ -47,9 +47,9 @@ describe('translatePart', () => {
   it('accumulates text deltas and emits text_end with full text', () => {
     const textBuf = new Map<string, string>();
     const reasoningBuf = new Map<string, string>();
-    [...translatePart({ type: 'text-start', id: 't1' }, textBuf, reasoningBuf)];
-    [...translatePart({ type: 'text-delta', id: 't1', text: 'hello ' }, textBuf, reasoningBuf)];
-    [...translatePart({ type: 'text-delta', id: 't1', text: 'world' }, textBuf, reasoningBuf)];
+    Array.from(translatePart({ type: 'text-start', id: 't1' }, textBuf, reasoningBuf));
+    Array.from(translatePart({ type: 'text-delta', id: 't1', text: 'hello ' }, textBuf, reasoningBuf));
+    Array.from(translatePart({ type: 'text-delta', id: 't1', text: 'world' }, textBuf, reasoningBuf));
     const ends = [...translatePart({ type: 'text-end', id: 't1' }, textBuf, reasoningBuf)];
     expect(ends).toEqual([{ type: 'text_end', text: 'hello world' }]);
     // Buffer cleaned up.
@@ -63,10 +63,10 @@ describe('translatePart', () => {
   it('tracks multiple concurrent text streams by id', () => {
     const textBuf = new Map<string, string>();
     const reasoningBuf = new Map<string, string>();
-    [...translatePart({ type: 'text-start', id: 'a' }, textBuf, reasoningBuf)];
-    [...translatePart({ type: 'text-start', id: 'b' }, textBuf, reasoningBuf)];
-    [...translatePart({ type: 'text-delta', id: 'a', text: 'A' }, textBuf, reasoningBuf)];
-    [...translatePart({ type: 'text-delta', id: 'b', text: 'B' }, textBuf, reasoningBuf)];
+    Array.from(translatePart({ type: 'text-start', id: 'a' }, textBuf, reasoningBuf));
+    Array.from(translatePart({ type: 'text-start', id: 'b' }, textBuf, reasoningBuf));
+    Array.from(translatePart({ type: 'text-delta', id: 'a', text: 'A' }, textBuf, reasoningBuf));
+    Array.from(translatePart({ type: 'text-delta', id: 'b', text: 'B' }, textBuf, reasoningBuf));
     expect([...translatePart({ type: 'text-end', id: 'a' }, textBuf, reasoningBuf)]).toEqual([
       { type: 'text_end', text: 'A' },
     ]);
@@ -78,8 +78,8 @@ describe('translatePart', () => {
   it('maps reasoning-* to thinking_*', () => {
     const textBuf = new Map<string, string>();
     const reasoningBuf = new Map<string, string>();
-    [...translatePart({ type: 'reasoning-start', id: 'r1' }, textBuf, reasoningBuf)];
-    [...translatePart({ type: 'reasoning-delta', id: 'r1', text: 'because' }, textBuf, reasoningBuf)];
+    Array.from(translatePart({ type: 'reasoning-start', id: 'r1' }, textBuf, reasoningBuf));
+    Array.from(translatePart({ type: 'reasoning-delta', id: 'r1', text: 'because' }, textBuf, reasoningBuf));
     expect([...translatePart({ type: 'reasoning-end', id: 'r1' }, textBuf, reasoningBuf)]).toEqual([
       { type: 'thinking_end', text: 'because' },
     ]);
@@ -125,7 +125,7 @@ describe('translatePart', () => {
         toolName: 'bash',
         input: { command: 'ls' },
         output: 'file1\nfile2',
-      } as TextStreamPart<ToolSet>),
+      }),
     ).toEqual([
       { type: 'tool_result', result: { toolCallId: 'tc1', output: 'file1\nfile2', isError: false } },
     ]);
@@ -138,7 +138,7 @@ describe('translatePart', () => {
       toolName: 'bash',
       input: { command: 'bad' },
       error: new Error('boom'),
-    } as TextStreamPart<ToolSet>);
+    });
     expect(events).toEqual([
       {
         type: 'tool_result',
@@ -173,7 +173,7 @@ function makeTool(name: string, opts: Partial<Tool> = {}): Tool {
     description: `${name} tool`,
     schema: z.object({}),
     ...opts,
-  } as Tool;
+  };
 }
 
 const echoModel = () =>
@@ -636,8 +636,8 @@ function todoToolPart(input: unknown, toolCallId: string): UIMessage['parts'][nu
     toolCallId,
     state: 'output-available',
     input: input as never,
-    output: 'todos updated' as never,
-  } as UIMessage['parts'][number];
+    output: 'todos updated',
+  };
 }
 
 describe('findLatestTodoInput', () => {

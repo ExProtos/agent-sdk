@@ -15,7 +15,7 @@
  */
 
 import { connect, type Socket } from 'node:net';
-import { createInterface, type Interface as ReadlineInterface } from 'node:readline';
+import { createInterface } from 'node:readline';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
@@ -47,7 +47,7 @@ if (!socketPath || !manifestJson) {
   process.exit(1);
 }
 
-const manifest: ManifestEntry[] = JSON.parse(manifestJson);
+const manifest = JSON.parse(manifestJson) as ManifestEntry[];
 process.stderr.write(
   `[shim] starting; socket=${socketPath} manifest=${manifest.map((m) => m.name).join(',')}\n`,
 );

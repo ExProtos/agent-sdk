@@ -50,6 +50,7 @@ const currentTime: Tool = {
     } catch (err) {
       throw new Error(
         `Invalid timezone "${timezone}": ${err instanceof Error ? err.message : String(err)}`,
+        { cause: err },
       );
     }
   },

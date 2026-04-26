@@ -9,7 +9,7 @@ import {
   translateNotification,
 } from '../../../src/backends/codex/index';
 import type { Attachment } from '../../../src/types';
-import type { ServerNotification, ThreadItem } from '../../../src/backends/codex/protocol';
+import type { ThreadItem } from '../../../src/backends/codex/protocol';
 import type { AgentEvent } from '../../../src/types';
 
 // ── EventQueue ──
@@ -173,7 +173,7 @@ describe('translateItem', () => {
       command: 'ls -la',
       aggregatedOutput: 'file1\nfile2',
       exitCode: 0,
-    } as ThreadItem);
+    });
 
     expect(events).toEqual([
       {
@@ -194,7 +194,7 @@ describe('translateItem', () => {
       command: 'false',
       aggregatedOutput: '',
       exitCode: 1,
-    } as ThreadItem);
+    });
 
     const result = events.find((e) => e.type === 'tool_result');
     expect(result).toMatchObject({ result: { isError: true } });
@@ -207,7 +207,7 @@ describe('translateItem', () => {
       command: 'pending',
       aggregatedOutput: null,
       exitCode: null,
-    } as ThreadItem);
+    });
 
     const result = events.find((e) => e.type === 'tool_result');
     expect(result).toMatchObject({ result: { output: '' } });
@@ -220,7 +220,7 @@ describe('translateItem', () => {
       id: 'fc-1',
       changes,
       status: 'completed',
-    } as ThreadItem);
+    });
 
     expect(events).toEqual([
       {
@@ -240,7 +240,7 @@ describe('translateItem', () => {
       id: 'fc-2',
       changes: [],
       status: 'failed',
-    } as ThreadItem);
+    });
 
     expect(events.find((e) => e.type === 'tool_result')).toMatchObject({
       result: { isError: true },
@@ -253,7 +253,7 @@ describe('translateItem', () => {
       id: 'fc-3',
       changes: [],
       status: 'declined',
-    } as ThreadItem);
+    });
 
     expect(events.find((e) => e.type === 'tool_result')).toMatchObject({
       result: { isError: true },
@@ -266,7 +266,7 @@ describe('translateItem', () => {
       id: 'fc-4',
       changes: [{ path: 'a.ts', kind: 'modify', diff: '...' }],
       status: 'inProgress',
-    } as ThreadItem);
+    });
 
     expect(events.map((e) => e.type)).toEqual(['tool_call_end']);
   });
@@ -280,7 +280,7 @@ describe('translateItem', () => {
       arguments: { url: 'https://example.com' },
       result: { ok: true },
       error: null,
-    } as ThreadItem);
+    });
 
     expect(events).toEqual([
       {
@@ -317,7 +317,7 @@ describe('translateItem', () => {
       arguments: {},
       result: null,
       error: { message: 'failed' },
-    } as ThreadItem);
+    });
 
     expect(events[1]).toMatchObject({ type: 'tool_result', result: { isError: true } });
   });
@@ -334,7 +334,7 @@ describe('translateItem', () => {
       senderThreadId: 'parent-thread-0',
       status: 'completed',
       agentsStates: { 'child-thread-1': { status: 'completed', message: 'done' } },
-    } as ThreadItem);
+    });
 
     expect(events).toEqual([
       {
@@ -376,7 +376,7 @@ describe('translateItem', () => {
       senderThreadId: 'parent',
       status: 'inProgress',
       agentsStates: {},
-    } as ThreadItem);
+    });
 
     const call = events[0] as { toolCall: { input: Record<string, unknown> } };
     expect(call.toolCall.input).toEqual({ tool: 'wait', receiverThreadIds: ['child'] });
@@ -394,7 +394,7 @@ describe('translateItem', () => {
       senderThreadId: 'parent',
       status: 'failed',
       agentsStates: {},
-    } as ThreadItem);
+    });
 
     expect(events.find((e) => e.type === 'tool_result')).toMatchObject({ result: { isError: true } });
   });
@@ -411,7 +411,7 @@ describe('translateItem', () => {
       senderThreadId: 'parent',
       status: 'inProgress',
       agentsStates: {},
-    } as ThreadItem);
+    });
 
     expect(events.map((e) => e.type)).toEqual(['tool_call_end']);
   });
@@ -423,13 +423,13 @@ describe('translateItem', () => {
       tool: 'myTool',
       arguments: { x: 1 },
       success: true,
-    } as ThreadItem);
+    });
 
     expect(events.map((e) => e.type)).toEqual(['tool_call_end']);
   });
 
   it('ignores unknown item types silently', async () => {
-    const events = await collectAsync({ type: 'imageView', id: 'img-1' } as unknown as ThreadItem);
+    const events = await collectAsync({ type: 'imageView', id: 'img-1' });
     expect(events).toEqual([]);
   });
 
@@ -438,7 +438,7 @@ describe('translateItem', () => {
       type: 'plan',
       id: 'plan-1',
       text: '1. read\n2. think\n3. edit',
-    } as ThreadItem);
+    });
 
     expect(events).toEqual([
       {
@@ -562,7 +562,7 @@ describe('translateNotification', () => {
       {
         method: 'item/agentMessage/delta',
         params: { itemId: 'i1', delta: 'hello', threadId: 't1', turnId: 'tu1' },
-      } as ServerNotification,
+      },
       't1',
       q,
     );
@@ -582,7 +582,7 @@ describe('translateNotification', () => {
       {
         method: 'item/reasoning/textDelta',
         params: { itemId: 'r1', delta: 'thinking…', threadId: 't1', turnId: 'tu1' },
-      } as ServerNotification,
+      },
       't1',
       q,
     );
@@ -605,7 +605,7 @@ describe('translateNotification', () => {
           threadId: 't1',
           turnId: 'tu1',
         },
-      } as ServerNotification,
+      },
       't1',
       q,
     );
@@ -621,7 +621,7 @@ describe('translateNotification', () => {
       {
         method: 'turn/completed',
         params: { threadId: 't1', turn: { id: 'tu1', status: 'completed', error: null } },
-      } as ServerNotification,
+      },
       't1',
       q,
     );
@@ -645,7 +645,7 @@ describe('translateNotification', () => {
       {
         method: 'turn/completed',
         params: { threadId: 't1', turn: { id: 'tu1', status: 'interrupted', error: null } },
-      } as ServerNotification,
+      },
       't1',
       q,
     );
@@ -664,7 +664,7 @@ describe('translateNotification', () => {
           threadId: 't1',
           turn: { id: 'tu1', status: 'failed', error: { message: 'boom' } },
         },
-      } as ServerNotification,
+      },
       't1',
       q,
     );
@@ -682,7 +682,7 @@ describe('translateNotification', () => {
       {
         method: 'item/agentMessage/delta',
         params: { itemId: 'i1', delta: 'leak', threadId: 'other', turnId: 'tu1' },
-      } as ServerNotification,
+      },
       't1',
       q,
     );
@@ -700,7 +700,7 @@ describe('translateNotification', () => {
       {
         method: 'item/agentMessage/delta',
         params: { itemId: 'i1', delta: 'pre-thread', threadId: 'unknown', turnId: 'tu1' },
-      } as ServerNotification,
+      },
       undefined,
       q,
     );
@@ -720,7 +720,7 @@ describe('translateNotification', () => {
     // notifications also queue session_end and end the queue.
     const q = new EventQueue();
     translateNotification(
-      { method: 'error', params: { message: 'something exploded' } } as ServerNotification,
+      { method: 'error', params: { message: 'something exploded' } },
       undefined,
       q,
     );
@@ -743,7 +743,7 @@ describe('translateNotification', () => {
   it('emits only activity for unhandled notification methods', async () => {
     const q = new EventQueue();
     translateNotification(
-      { method: 'app/list/updated', params: {} } as ServerNotification,
+      { method: 'app/list/updated', params: {} },
       undefined,
       q,
     );
