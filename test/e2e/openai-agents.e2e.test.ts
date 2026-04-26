@@ -21,7 +21,14 @@ import {
 } from './helpers';
 import { readJsonlItems } from '../../src/backends/openai-agents/index';
 
-const MODEL = 'gpt-5-nano';
+const MODEL = 'gpt-5-mini';
+// `reasoning.effort: 'minimal'` for the trivial no-tool test (otherwise
+// the model spends its budget reasoning and emits no text); 'low' for
+// the tool-use tests (default 'medium' is empirically the worst — it
+// neither plans tool calls reliably nor finishes quickly. 'low' and
+// 'high' both work; 'low' is faster + cheaper).
+const MINIMAL_REASONING = { reasoning: { effort: 'minimal' as const } };
+const LOW_REASONING = { reasoning: { effort: 'low' as const } };
 
 function freshSessionsDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'openai-agents-e2e-'));
@@ -30,7 +37,7 @@ function freshSessionsDir(): string {
 describe.skipIf(!hasOpenAIApiKey)('OpenAI Agents end-to-end', () => {
   it('completes a trivial query and emits a coherent event sequence', async () => {
     const agent = new Agent({
-      backend: openaiAgents({ model: MODEL }),
+      backend: openaiAgents({ model: MODEL, modelSettings: MINIMAL_REASONING }),
     });
     try {
       const query = agent.run({
@@ -68,7 +75,7 @@ describe.skipIf(!hasOpenAIApiKey)('OpenAI Agents end-to-end', () => {
     };
 
     const agent = new Agent({
-      backend: openaiAgents({ model: MODEL, tools: [currentTime] }),
+      backend: openaiAgents({ model: MODEL, modelSettings: LOW_REASONING, tools: [currentTime] }),
     });
     try {
       const query = agent.run({
@@ -95,7 +102,7 @@ describe.skipIf(!hasOpenAIApiKey)('OpenAI Agents end-to-end', () => {
     const sessionsDir = freshSessionsDir();
 
     const agentA = new Agent({
-      backend: openaiAgents({ model: MODEL, sessionsDir }),
+      backend: openaiAgents({ model: MODEL, modelSettings: LOW_REASONING, sessionsDir }),
     });
     let continuation: string | undefined;
     try {
@@ -115,7 +122,7 @@ describe.skipIf(!hasOpenAIApiKey)('OpenAI Agents end-to-end', () => {
     }
 
     const agentB = new Agent({
-      backend: openaiAgents({ model: MODEL, sessionsDir }),
+      backend: openaiAgents({ model: MODEL, modelSettings: LOW_REASONING, sessionsDir }),
     });
     try {
       const q = agentB.run({
@@ -134,6 +141,7 @@ describe.skipIf(!hasOpenAIApiKey)('OpenAI Agents end-to-end', () => {
     const agent = new Agent({
       backend: openaiAgents({
         model: MODEL,
+        modelSettings: LOW_REASONING,
         tools: [hostedTools.webSearch()],
       }),
     });

@@ -279,7 +279,7 @@ export class OpenAIAgentsBackend implements Backend {
       });
       if (resolved === undefined) continue;
       out.push(resolved.sdkTool);
-      this.canonicalByWireName.set(resolved.wireName, t.name);
+      registerWireName(this.canonicalByWireName, resolved.wireName, t.name);
     }
     return out;
   }
@@ -293,13 +293,15 @@ export class OpenAIAgentsBackend implements Backend {
     // Use the canonical union schema verbatim — wrapSchemaForOpenAI flattens
     // it into a top-level keyed object the SDK's tool() helper accepts.
     const { params, unwrap } = wrapSchemaForOpenAI(taskTool.schema as z.ZodTypeAny);
+    const strictParams = strictifyZodForOpenAI(params);
     return tool({
       name: 'task',
       description: taskTool.description,
       strict: true,
-      parameters: params,
+      parameters: strictParams,
       execute: async (args: unknown) => {
-        const input = unwrap(args);
+        const denulled = normalizeNullsToUndefined(args, params);
+        const input = unwrap(denulled);
         if (typeof input !== 'object' || input === null) {
           throw new Error('task tool: input must be an object');
         }
@@ -344,13 +346,15 @@ export class OpenAIAgentsBackend implements Backend {
     // one, unwrap returns whichever branch was filled. We store the
     // unwrapped value and let formatTodos discriminate at injection time.
     const { params, unwrap } = wrapSchemaForOpenAI(todoTool.schema as z.ZodTypeAny);
+    const strictParams = strictifyZodForOpenAI(params);
     return tool({
       name: 'todo',
       description: todoTool.description,
       strict: true,
-      parameters: params,
+      parameters: strictParams,
       execute: async (args: unknown, runContext) => {
-        const input = unwrap(args);
+        const denulled = normalizeNullsToUndefined(args, params);
+        const input = unwrap(denulled);
         const ctx = runContext?.context as { continuation?: string } | undefined;
         if (ctx?.continuation !== undefined) {
           todos.set(ctx.continuation, input);
@@ -524,21 +528,103 @@ export function buildHostedFromMarker(
   return { sdkTool, wireName: extractWireName(sdkTool, marker) };
 }
 
+/**
+ * Register a wire name → canonical mapping for event translation. Hosted
+ * tools emit call items with a `_call` suffix on the type (`web_search`
+ * tool → `web_search_call` item), so we register both forms when the wire
+ * name doesn't already end in `_call`. Custom function tools emit items
+ * with the function name as-is — no suffix to worry about.
+ */
+function registerWireName(map: Map<string, string>, wireName: string, canonical: string): void {
+  map.set(wireName, canonical);
+  if (!wireName.endsWith('_call')) map.set(`${wireName}_call`, canonical);
+}
+
 function extractWireName(sdkTool: unknown, fallback: string): string {
   if (typeof sdkTool !== 'object' || sdkTool === null) return fallback;
   const t = sdkTool as { name?: string; type?: string };
   return t.name ?? t.type ?? fallback;
 }
 
+/**
+ * OpenAI's strict schema mode requires every property in `properties` to
+ * also be in the `required` array. Zod `.optional()` produces a property
+ * that's omitted from `required`, which fails. Convert each `.optional()`
+ * field to `.nullable()` so the property stays in `required` but can be
+ * null. After validation we normalize null → undefined so the user's
+ * execute body sees the original optional semantics.
+ *
+ * Recurses into nested objects and into z.array element schemas.
+ */
+export function strictifyZodForOpenAI(
+  schema: z.ZodObject<z.ZodRawShape>,
+): z.ZodObject<z.ZodRawShape> {
+  const newShape: Record<string, z.ZodTypeAny> = {};
+  for (const [key, value] of Object.entries(schema.shape)) {
+    newShape[key] = strictifyZodValue(value as z.ZodTypeAny);
+  }
+  return z.object(newShape);
+}
+
+function strictifyZodValue(v: z.ZodTypeAny): z.ZodTypeAny {
+  if (v instanceof z.ZodOptional) {
+    const inner = (v as z.ZodOptional<z.ZodTypeAny>).unwrap();
+    return strictifyZodValue(inner).nullable();
+  }
+  if (v instanceof z.ZodObject) {
+    return strictifyZodForOpenAI(v as z.ZodObject<z.ZodRawShape>);
+  }
+  if (v instanceof z.ZodArray) {
+    const elem = (v as z.ZodArray<z.ZodTypeAny>).element as z.ZodTypeAny;
+    return z.array(strictifyZodValue(elem));
+  }
+  return v;
+}
+
+/**
+ * After OpenAI returns args validated against the strictified schema, walk
+ * them and turn null back into undefined for fields that were originally
+ * `.optional()`. Keeps the user's `execute` body's view of "missing"
+ * consistent with the original Tool definition.
+ */
+export function normalizeNullsToUndefined(args: unknown, originalSchema: z.ZodTypeAny): unknown {
+  if (args === null || args === undefined) return args;
+  if (originalSchema instanceof z.ZodObject) {
+    if (typeof args !== 'object') return args;
+    const out: Record<string, unknown> = {};
+    const shape = (originalSchema as z.ZodObject<z.ZodRawShape>).shape;
+    for (const [key, def] of Object.entries(shape)) {
+      const v = (args as Record<string, unknown>)[key];
+      if (def instanceof z.ZodOptional) {
+        if (v === null || v === undefined) continue;
+        const inner = (def as z.ZodOptional<z.ZodTypeAny>).unwrap();
+        out[key] = normalizeNullsToUndefined(v, inner);
+      } else if (def instanceof z.ZodObject || def instanceof z.ZodArray) {
+        out[key] = normalizeNullsToUndefined(v, def as z.ZodTypeAny);
+      } else {
+        out[key] = v;
+      }
+    }
+    return out;
+  }
+  if (originalSchema instanceof z.ZodArray && Array.isArray(args)) {
+    const elem = (originalSchema as z.ZodArray<z.ZodTypeAny>).element as z.ZodTypeAny;
+    return args.map((item) => normalizeNullsToUndefined(item, elem));
+  }
+  return args;
+}
+
 function wrapPlainTool(t: Tool): SdkTool {
   const { params, unwrap } = wrapSchemaForOpenAI(t.schema as z.ZodTypeAny);
+  const strictParams = strictifyZodForOpenAI(params);
   return tool({
     name: t.name,
     description: t.description,
     strict: true,
-    parameters: params,
+    parameters: strictParams,
     execute: async (args: unknown) => {
-      const actualArgs = unwrap(args);
+      const denulled = normalizeNullsToUndefined(args, params);
+      const actualArgs = unwrap(denulled);
       const result = await t.execute!(actualArgs);
       return typeof result === 'string' ? result : JSON.stringify(result);
     },
