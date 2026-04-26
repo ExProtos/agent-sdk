@@ -27,3 +27,17 @@ codex({
 - Document the limitation: granularity is whatever Codex's TOML exposes, not per-tool. Bash is load-bearing for Codex's loop and effectively always available.
 
 **Caveat.** We'd need to verify the exact set of Codex TOML keys that disable tools. Today only `tools.web_search` is confirmed; others (`tools.apply_patch`, `tools.plan`, …) need checking against upstream Codex's config schema before documenting.
+
+## Verify Codex's `item/completed` duplication behavior
+
+Confirm whether Codex actually emits `item/completed` more than once for the same item id over a long-lived item's lifecycle (`fileChange`, `collabAgentToolCall`).
+
+**Why.** spec/backends/codex.md currently hedges: the typed `status` field includes `inProgress`, which *hints* duplicates can happen, but we haven't observed it on the wire. The "Duplicate `tool_call_end` is possible" subsection is written defensively as a result. If duplicates never occur in practice, that whole section can collapse to a single sentence ("translateItem is 1:1 with item/completed; no dedupe needed"). If they do, the existing consumer rule stands — but with evidence behind it.
+
+**Shape.** ~5 min of e2e instrumentation:
+
+- In an e2e run that exercises a long-lived `fileChange` (the multi-edit cases already do), log every raw `item/completed` notification with `{type, id, status}` before it hits `translateItem`.
+- Group by `id`, count entries per group. Any group with count > 1 confirms the behavior.
+- Repeat for `collabAgentToolCall` once we have an e2e that spawns a sub-agent.
+
+**Outcome.** Either delete the hedge in spec/backends/codex.md and add a one-line "verified single-emission, no dedupe needed" note, or keep the section and replace "though we haven't observed it on the wire" with a concrete reproduction (which item type, which conditions).
