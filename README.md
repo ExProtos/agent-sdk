@@ -82,6 +82,7 @@ Pre-built `Tool` definitions that map to each backend's native equivalent:
 | `webFetch` | `WebFetch` | `webSearch` (`openPage` action) |
 | `webSearch` | `WebSearch` | `webSearch` |
 | `todo` | `TodoWrite` | `plan` |
+| `task` | `Task` | `collabAgentToolCall` |
 
 Pass `tools.all` for the full set, or pick individuals:
 

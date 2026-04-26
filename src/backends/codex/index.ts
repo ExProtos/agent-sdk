@@ -435,6 +435,39 @@ export function translateItem(item: ThreadItem, queue: EventQueue): void {
       return;
     }
 
+    case 'collabAgentToolCall': {
+      const i = item as {
+        id: string;
+        tool: string;
+        prompt: string | null;
+        model: string | null;
+        receiverThreadIds: string[];
+        senderThreadId: string;
+        status: 'inProgress' | 'completed' | 'failed';
+        agentsStates: Record<string, { status: string; message: string | null }>;
+      };
+      const input: Record<string, unknown> = { tool: i.tool, receiverThreadIds: i.receiverThreadIds };
+      if (i.prompt !== null) input.prompt = i.prompt;
+      if (i.model !== null) input.model = i.model;
+      queue.push({
+        type: 'tool_call_end',
+        toolCall: { id: i.id, name: builtin.task.name, input },
+      });
+      // Skip in-progress — same rule as fileChange. Wait for the sub-agent
+      // to settle before emitting a tool_result.
+      if (i.status === 'completed' || i.status === 'failed') {
+        queue.push({
+          type: 'tool_result',
+          result: {
+            toolCallId: i.id,
+            output: { status: i.status, agentsStates: i.agentsStates },
+            isError: i.status === 'failed',
+          },
+        });
+      }
+      return;
+    }
+
     case 'mcpToolCall':
     case 'dynamicToolCall': {
       const i = item as { id: string; tool: string; arguments: unknown; result?: unknown; error?: unknown };

@@ -203,6 +203,51 @@ export const todo: Tool = {
 };
 
 /**
+ * Delegate work to a sub-agent. Both backends ship a primitive but with
+ * very different shapes:
+ *   - Claude `Task` is one-shot: { description, prompt, subagent_type } → result.
+ *   - Codex `collabAgentToolCall` is multi-step: spawn / sendInput / wait /
+ *     resume / closeAgent against a long-lived sub-thread.
+ *
+ * Schema is a union so the model emits whichever shape its training prefers.
+ * The catalog name is `task` either way; consumers switch on a single
+ * canonical name and discriminate on input shape if they care.
+ */
+export const task: Tool = {
+  name: 'task',
+  description:
+    'Delegate work to a sub-agent. Claude form: one-shot {description, prompt, subagent_type}. Codex form: multi-step {tool, prompt?, model?, receiverThreadIds?} where tool is spawnAgent | sendInput | resumeAgent | wait | closeAgent.',
+  schema: z.union([
+    z.object({
+      description: z.string(),
+      prompt: z.string(),
+      subagent_type: z.string(),
+    }),
+    z.object({
+      tool: z.enum(['spawnAgent', 'sendInput', 'resumeAgent', 'wait', 'closeAgent']),
+      prompt: z.string().optional(),
+      model: z.string().optional(),
+      receiverThreadIds: z.array(z.string()).optional(),
+    }),
+  ]),
+  native: {
+    claude: 'Task',
+    codex: 'collabAgentToolCall',
+  },
+};
+
+/**
  * Default coding-agent toolbox.
  */
-export const all: Tool[] = [bash, read, write, edit, glob, grep, webFetch, webSearch, todo];
+export const all: Tool[] = [
+  bash,
+  read,
+  write,
+  edit,
+  glob,
+  grep,
+  webFetch,
+  webSearch,
+  todo,
+  task,
+];

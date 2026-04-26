@@ -6,6 +6,7 @@ import {
   glob,
   grep,
   read,
+  task,
   todo,
   webFetch,
   webSearch,
@@ -14,9 +15,9 @@ import {
 import type { Tool } from '../../src/tools/types';
 
 describe('builtin tools', () => {
-  it('all is the canonical 9-tool set', () => {
-    expect(all).toEqual([bash, read, write, edit, glob, grep, webFetch, webSearch, todo]);
-    expect(all).toHaveLength(9);
+  it('all is the canonical 10-tool set', () => {
+    expect(all).toEqual([bash, read, write, edit, glob, grep, webFetch, webSearch, todo, task]);
+    expect(all).toHaveLength(10);
   });
 
   it('every tool has unique name', () => {
@@ -53,6 +54,7 @@ describe('native tool mappings', () => {
     webFetch: 'WebFetch',
     webSearch: 'WebSearch',
     todo: 'TodoWrite',
+    task: 'Task',
   };
   const expectedCodex: Record<string, string | undefined> = {
     bash: 'command/exec',
@@ -64,6 +66,7 @@ describe('native tool mappings', () => {
     webFetch: 'webSearch',
     webSearch: 'webSearch',
     todo: 'plan',
+    task: 'collabAgentToolCall',
   };
 
   it.each(all)('$name has the expected native.claude mapping', (tool: Tool) => {
@@ -164,11 +167,46 @@ describe('schema validation', () => {
     expect(todo.schema.safeParse({ random: 'thing' }).success).toBe(false);
   });
 
+  it('task accepts the Claude one-shot shape', () => {
+    expect(
+      task.schema.safeParse({
+        description: 'Find TODOs',
+        prompt: 'Search src/ for TODO comments and summarize.',
+        subagent_type: 'general-purpose',
+      }).success,
+    ).toBe(true);
+  });
+
+  it('task accepts the Codex collab shape (spawn)', () => {
+    expect(
+      task.schema.safeParse({
+        tool: 'spawnAgent',
+        prompt: 'Investigate this',
+        model: 'gpt-5',
+        receiverThreadIds: ['abc'],
+      }).success,
+    ).toBe(true);
+  });
+
+  it('task accepts collab shape with only `tool`', () => {
+    expect(task.schema.safeParse({ tool: 'wait' }).success).toBe(true);
+    expect(task.schema.safeParse({ tool: 'closeAgent' }).success).toBe(true);
+  });
+
+  it('task rejects unknown collab tool values', () => {
+    expect(task.schema.safeParse({ tool: 'destroyAgent' }).success).toBe(false);
+  });
+
+  it('task rejects unrelated shapes', () => {
+    expect(task.schema.safeParse({}).success).toBe(false);
+    expect(task.schema.safeParse({ random: 'thing' }).success).toBe(false);
+  });
+
 });
 
 describe('Tool type guarantees', () => {
   it('every tool can be passed where a Tool is expected', () => {
-    const list: Tool[] = [bash, read, write, edit, glob, grep, webFetch, webSearch, todo];
-    expect(list.length).toBe(9);
+    const list: Tool[] = [bash, read, write, edit, glob, grep, webFetch, webSearch, todo, task];
+    expect(list.length).toBe(10);
   });
 });

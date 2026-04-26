@@ -319,6 +319,100 @@ describe('translateItem', () => {
     expect(events[1]).toMatchObject({ type: 'tool_result', result: { isError: true } });
   });
 
+  it('emits tool_call_end + tool_result for completed collabAgentToolCall', async () => {
+    const events = await collectAsync({
+      type: 'collabAgentToolCall',
+      id: 'collab-1',
+      tool: 'spawnAgent',
+      prompt: 'Investigate this',
+      model: 'gpt-5',
+      reasoningEffort: null,
+      receiverThreadIds: ['child-thread-1'],
+      senderThreadId: 'parent-thread-0',
+      status: 'completed',
+      agentsStates: { 'child-thread-1': { status: 'completed', message: 'done' } },
+    } as ThreadItem);
+
+    expect(events).toEqual([
+      {
+        type: 'tool_call_end',
+        toolCall: {
+          id: 'collab-1',
+          name: 'task',
+          input: {
+            tool: 'spawnAgent',
+            receiverThreadIds: ['child-thread-1'],
+            prompt: 'Investigate this',
+            model: 'gpt-5',
+          },
+        },
+      },
+      {
+        type: 'tool_result',
+        result: {
+          toolCallId: 'collab-1',
+          output: {
+            status: 'completed',
+            agentsStates: { 'child-thread-1': { status: 'completed', message: 'done' } },
+          },
+          isError: false,
+        },
+      },
+    ]);
+  });
+
+  it('omits prompt and model from input when null', async () => {
+    const events = await collectAsync({
+      type: 'collabAgentToolCall',
+      id: 'collab-2',
+      tool: 'wait',
+      prompt: null,
+      model: null,
+      reasoningEffort: null,
+      receiverThreadIds: ['child'],
+      senderThreadId: 'parent',
+      status: 'inProgress',
+      agentsStates: {},
+    } as ThreadItem);
+
+    const call = events[0] as { toolCall: { input: Record<string, unknown> } };
+    expect(call.toolCall.input).toEqual({ tool: 'wait', receiverThreadIds: ['child'] });
+  });
+
+  it('marks collabAgentToolCall tool_result as error when status=failed', async () => {
+    const events = await collectAsync({
+      type: 'collabAgentToolCall',
+      id: 'collab-3',
+      tool: 'spawnAgent',
+      prompt: null,
+      model: null,
+      reasoningEffort: null,
+      receiverThreadIds: [],
+      senderThreadId: 'parent',
+      status: 'failed',
+      agentsStates: {},
+    } as ThreadItem);
+
+    expect(events.find((e) => e.type === 'tool_result')).toMatchObject({ result: { isError: true } });
+  });
+
+  it('emits only tool_call_end for in-progress collabAgentToolCall', async () => {
+    const events = await collectAsync({
+      type: 'collabAgentToolCall',
+      id: 'collab-4',
+      tool: 'sendInput',
+      prompt: 'more context',
+      model: null,
+      reasoningEffort: null,
+      receiverThreadIds: ['child'],
+      senderThreadId: 'parent',
+      status: 'inProgress',
+      agentsStates: {},
+    } as ThreadItem);
+
+    expect(events.map((e) => e.type)).toEqual(['tool_call_end']);
+  });
+
   it('handles dynamicToolCall like mcpToolCall', async () => {
     const events = await collectAsync({
       type: 'dynamicToolCall',

@@ -110,6 +110,18 @@ export type ThreadItem =
       action: WebSearchAction | null;
     }
   | {
+      type: 'collabAgentToolCall';
+      id: string;
+      tool: 'spawnAgent' | 'sendInput' | 'resumeAgent' | 'wait' | 'closeAgent';
+      prompt: string | null;
+      model: string | null;
+      reasoningEffort: string | null;
+      receiverThreadIds: string[];
+      senderThreadId: string;
+      status: 'inProgress' | 'completed' | 'failed';
+      agentsStates: Record<string, { status: string; message: string | null }>;
+    }
+  | {
       type: 'mcpToolCall';
       id: string;
       server: string;

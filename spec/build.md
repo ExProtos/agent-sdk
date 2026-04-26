@@ -124,7 +124,7 @@ Required:
 
 - Request params/responses: `InitializeParams`, `ThreadStartParams`/`Response`, `ThreadResumeParams`/`Response`, `TurnStartParams`/`Response`, `TurnInterruptParams`, `LoginAccountParams`/`Response`, `GetAccountResponse`.
 - `UserInput`: `{ type: 'text'; text; text_elements: [] } | { type: 'image'; url } | { type: 'localImage'; path }`.
-- `ThreadItem` discriminated union: `agentMessage`, `reasoning`, `plan`, `commandExecution`, `fileChange`, `webSearch`, `mcpToolCall`, `dynamicToolCall`. Include the bare `{ type: string; id: string }` fallback variant — Codex's protocol grows; unknown items shouldn't crash the type checker.
+- `ThreadItem` discriminated union: `agentMessage`, `reasoning`, `plan`, `commandExecution`, `fileChange`, `webSearch`, `collabAgentToolCall`, `mcpToolCall`, `dynamicToolCall`. Include the bare `{ type: string; id: string }` fallback variant — Codex's protocol grows; unknown items shouldn't crash the type checker.
 - `ServerNotification` union: `thread/started`, `turn/started`, `turn/completed`, `item/started`, `item/completed`, `item/agentMessage/delta`, `item/reasoning/textDelta`, `error`, plus a `{ method: string; params: unknown }` fallback.
 
 **Critical correctness fix:** `ThreadStartResponse` is `{ thread: { id: string } }`, **not** `{ threadId }`. Reading the wrong field hands back `undefined` and breaks subsequent `turn/start` calls.

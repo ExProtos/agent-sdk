@@ -192,10 +192,47 @@ Track multi-step plans as the agent works. **Union schema** because Claude's and
 
 Codex `plan` items carry a single `text` field (freeform). Claude `TodoWrite` carries a structured array. The union schema lets the model emit whatever its training prefers; the canonical name on the event is `todo` either way, with the raw input shape preserved.
 
+## `task`
+
+Delegate work to a sub-agent. Both backends ship a primitive but with significantly different shapes — one canonical name, **union schema**.
+
+```typescript
+{
+  name: 'task',
+  description:
+    'Delegate work to a sub-agent. Claude form: one-shot {description, prompt, subagent_type}. Codex form: multi-step {tool, prompt?, model?, receiverThreadIds?} where tool is spawnAgent | sendInput | resumeAgent | wait | closeAgent.',
+  schema: z.union([
+    z.object({
+      description: z.string(),
+      prompt: z.string(),
+      subagent_type: z.string(),
+    }),
+    z.object({
+      tool: z.enum(['spawnAgent', 'sendInput', 'resumeAgent', 'wait', 'closeAgent']),
+      prompt: z.string().optional(),
+      model: z.string().optional(),
+      receiverThreadIds: z.array(z.string()).optional(),
+    }),
+  ]),
+  native: { claude: 'Task', codex: 'collabAgentToolCall' },
+}
+```
+
+The two shapes reflect different conceptual models:
+
+- **Claude `Task`** is one-shot: spawn a sub-agent with a description, prompt, and subagent_type, get a result back.
+- **Codex `collabAgentToolCall`** is multi-step: spawn a long-lived sub-thread, then use `sendInput` / `wait` / `resumeAgent` / `closeAgent` to interact with it. Each call carries a `tool` discriminator naming the operation.
+
+Collapsing both into `task` is for **naming portability**, not shape unification. The model on Claude only ever emits the one-shot shape; the model on Codex only ever emits the collab shape. Consumers handling tool calls effectively get one shape per backend — the union just lets a single switch on `event.toolCall.name === 'task'` work cross-backend. Same tradeoff as `edit`'s find/replace-vs-patch and `todo`'s structured-vs-text.
+
+The Codex backend translates `collabAgentToolCall` items to `task` events with `{tool, receiverThreadIds, prompt?, model?}` as input. Tool_result is emitted only when status is `completed | failed` (skip `inProgress` — same rule as `fileChange`).
+
 ## `tools.all`
 
 ```typescript
-export const all: Tool[] = [bash, read, write, edit, glob, grep, webFetch, webSearch, todo];
+export const all: Tool[] = [
+  bash, read, write, edit, glob, grep, webFetch, webSearch, todo, task,
+];
 ```
 
 Order is the declaration order above. Consumers pass either `tools.all` or a hand-picked subset:

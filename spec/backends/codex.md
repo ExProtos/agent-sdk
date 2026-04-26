@@ -163,6 +163,7 @@ Maps Codex's typed items to canonical events. Tool names reference `builtin.<too
 | `commandExecution` | `tool_call_end` named `bash` with `{command}` + `tool_result` (`output: aggregatedOutput ?? ''`, `isError: exitCode !== null && exitCode !== 0`) |
 | `fileChange` | `tool_call_end` named `edit` with `{changes}` + `tool_result` only when status is `completed`/`failed`/`declined` (skip `inProgress`) |
 | `plan` | `tool_call_end` named `todo` with `{text}` |
+| `collabAgentToolCall` | `tool_call_end` named `task` with `{tool, receiverThreadIds, prompt?, model?}` + `tool_result` only when status is `completed`/`failed` (skip `inProgress`) |
 | `webSearch` (action `openPage`) | `tool_call_end` named `webFetch` with `{url}` |
 | `webSearch` (action `search`) | `tool_call_end` named `webSearch` with `{query}` and/or `{queries}` |
 | `webSearch` (action `findInPage`) | `tool_call_end` named `webSearch` with `{url, pattern}` |
