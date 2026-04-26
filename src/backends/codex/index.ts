@@ -21,7 +21,7 @@
 
 import { fileURLToPath } from 'node:url';
 import * as path from 'node:path';
-import type { AgentEvent, AgentQuery, Backend, QueryInput } from '../../types';
+import type { AgentEvent, AgentQuery, Attachment, Backend, QueryInput } from '../../types';
 import type { Tool } from '../../tools/types';
 import * as builtin from '../../tools/builtin';
 import { CodexClient, CodexRpcError, type CodexClientOptions } from './client';
@@ -189,13 +189,19 @@ export class CodexBackend implements Backend {
 
         queue.push({ type: 'session_start', continuation: activeThreadId });
 
-        // If no message, we just resumed for inspection — nothing to send.
-        if (input.message === undefined) {
+        // If no message AND no attachments, we just resumed for inspection.
+        const hasAttachments = (input.attachments?.length ?? 0) > 0;
+        if (input.message === undefined && !hasAttachments) {
           queue.push({ type: 'session_end', usage: zeroUsage(), stopReason: 'stop' });
           return;
         }
 
-        const userInput: UserInput[] = [{ type: 'text', text: input.message, text_elements: [] }];
+        const userInput: UserInput[] = [
+          ...(input.attachments ?? []).map(attachmentToCodexInput),
+          ...(input.message !== undefined
+            ? [{ type: 'text' as const, text: input.message, text_elements: [] as [] }]
+            : []),
+        ];
 
         await client.request<TurnStartResponse>('turn/start', {
           threadId: activeThreadId,
@@ -508,6 +514,25 @@ export function translateItem(item: ThreadItem, queue: EventQueue): void {
 
 function zeroUsage() {
   return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+}
+
+/**
+ * Map a canonical Attachment to Codex's UserInput. Codex distinguishes
+ * remote URLs (`image`) from local files (`localImage`); base64 attachments
+ * collapse into a data URL on the `image` form.
+ */
+export function attachmentToCodexInput(att: Attachment): UserInput {
+  if (att.type !== 'image') {
+    throw new Error(`Codex backend: unsupported attachment type '${(att as { type: string }).type}'`);
+  }
+  switch (att.source.kind) {
+    case 'url':
+      return { type: 'image', url: att.source.url };
+    case 'path':
+      return { type: 'localImage', path: att.source.path };
+    case 'base64':
+      return { type: 'image', url: `data:${att.source.mimeType};base64,${att.source.data}` };
+  }
 }
 
 /**

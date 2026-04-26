@@ -2,6 +2,7 @@ export { Agent, type AgentConfig } from './agent';
 export type {
   AgentEvent,
   AgentQuery,
+  Attachment,
   Backend,
   QueryInput,
   StopReason,

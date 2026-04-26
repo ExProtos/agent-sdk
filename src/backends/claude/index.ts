@@ -30,10 +30,21 @@ import {
   type SDKMessage,
   type SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk';
+import * as fs from 'node:fs/promises';
 import type { ZodObject, ZodRawShape } from 'zod';
 
-import type { AgentEvent, AgentQuery, Backend, QueryInput } from '../../types';
+import type { AgentEvent, AgentQuery, Attachment, Backend, QueryInput } from '../../types';
 import type { Tool } from '../../tools/types';
+
+type ClaudeImageMediaType = 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp';
+type ClaudeContentPart =
+  | { type: 'text'; text: string }
+  | {
+      type: 'image';
+      source:
+        | { type: 'base64'; data: string; media_type: ClaudeImageMediaType }
+        | { type: 'url'; url: string };
+    };
 
 const MCP_SERVER_NAME = 'agent-sdk-tools';
 
@@ -76,6 +87,10 @@ const STALE_SESSION_RE = /no conversation found|ENOENT.*\.jsonl|session.*not fou
 
 /**
  * Push-based async iterable for streaming user messages into the SDK.
+ *
+ * `push()` accepts plain text (the public AgentQuery.push surface). The
+ * backend's first-turn path uses `pushParts()` directly to attach images
+ * alongside text without going through the public string-only API.
  */
 export class MessageStream {
   private queue: SDKUserMessage[] = [];
@@ -83,9 +98,13 @@ export class MessageStream {
   private done = false;
 
   push(text: string): void {
+    this.pushParts([{ type: 'text', text }]);
+  }
+
+  pushParts(content: ClaudeContentPart[]): void {
     this.queue.push({
       type: 'user',
-      message: { role: 'user', content: text },
+      message: { role: 'user', content },
       parent_tool_use_id: null,
       session_id: '',
     });
@@ -193,7 +212,23 @@ export class ClaudeBackend implements Backend {
 
   query(input: QueryInput): AgentQuery {
     const stream = new MessageStream();
-    if (input.message !== undefined) stream.push(input.message);
+
+    // Initial-turn content. Path attachments need fs.readFile, so the build
+    // is async; we kick it off here, push to the stream when ready, and
+    // capture any error to re-surface as an AgentEvent in events() below.
+    let initialError: Error | null = null;
+    const initial = buildInitialContentParts(input);
+    if (initial !== null) {
+      void initial.then(
+        (parts) => {
+          if (parts.length > 0) stream.pushParts(parts);
+        },
+        (err) => {
+          initialError = err instanceof Error ? err : new Error(String(err));
+          stream.end();
+        },
+      );
+    }
 
     const sdkResult = sdkQuery({
       prompt: stream,
@@ -212,6 +247,17 @@ export class ClaudeBackend implements Backend {
     const wrapped = this.wrappedToolNames;
 
     async function* events(): AsyncGenerator<AgentEvent> {
+      // Wait out the initial-content build so an attachment failure surfaces
+      // as a normal `error` event rather than a hung iterator.
+      if (initial !== null) {
+        await initial.catch(() => {
+          /* error captured into initialError */
+        });
+        if (initialError !== null) {
+          yield { type: 'error', message: initialError.message, retryable: false };
+          return;
+        }
+      }
       try {
         for await (const message of sdkResult) {
           if (aborted) return;
@@ -351,4 +397,77 @@ function extractToolShape(t: Tool): { shape: ZodRawShape; wrapped: boolean } {
     return { shape: schema.shape as ZodRawShape, wrapped: false };
   }
   return { shape: { input: t.schema } as unknown as ZodRawShape, wrapped: true };
+}
+
+// ── Initial-turn content assembly ──
+
+/**
+ * Build the first-turn content parts from `QueryInput.message` + attachments.
+ * Returns null when there's nothing to send (resume-only). Path-based
+ * attachments are read from disk and base64-encoded inline.
+ */
+export function buildInitialContentParts(input: QueryInput): Promise<ClaudeContentPart[]> | null {
+  const hasMsg = input.message !== undefined;
+  const hasAtt = (input.attachments?.length ?? 0) > 0;
+  if (!hasMsg && !hasAtt) return null;
+  return (async () => {
+    const parts: ClaudeContentPart[] = [];
+    for (const att of input.attachments ?? []) {
+      parts.push(await attachmentToClaudePart(att));
+    }
+    if (input.message !== undefined) parts.push({ type: 'text', text: input.message });
+    return parts;
+  })();
+}
+
+async function attachmentToClaudePart(att: Attachment): Promise<ClaudeContentPart> {
+  if (att.type !== 'image') {
+    throw new Error(`Claude backend: unsupported attachment type '${(att as { type: string }).type}'`);
+  }
+  switch (att.source.kind) {
+    case 'url':
+      return { type: 'image', source: { type: 'url', url: att.source.url } };
+    case 'base64':
+      return {
+        type: 'image',
+        source: {
+          type: 'base64',
+          data: att.source.data,
+          media_type: assertClaudeMediaType(att.source.mimeType),
+        },
+      };
+    case 'path': {
+      const data = (await fs.readFile(att.source.path)).toString('base64');
+      return {
+        type: 'image',
+        source: {
+          type: 'base64',
+          data,
+          media_type: assertClaudeMediaType(mediaTypeFromPath(att.source.path)),
+        },
+      };
+    }
+  }
+}
+
+function assertClaudeMediaType(m: string): ClaudeImageMediaType {
+  if (m === 'image/jpeg' || m === 'image/png' || m === 'image/gif' || m === 'image/webp') return m;
+  throw new Error(`Claude backend: unsupported image media type '${m}'`);
+}
+
+function mediaTypeFromPath(p: string): string {
+  const ext = p.slice(p.lastIndexOf('.') + 1).toLowerCase();
+  switch (ext) {
+    case 'jpg':
+    case 'jpeg':
+      return 'image/jpeg';
+    case 'png':
+      return 'image/png';
+    case 'gif':
+      return 'image/gif';
+    case 'webp':
+      return 'image/webp';
+    default:
+      throw new Error(`Claude backend: cannot infer image media type from extension '.${ext}'`);
+  }
 }

@@ -1,7 +1,16 @@
 import { describe, expect, it } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk';
-import { ClaudeBackend, MessageStream, claude, translateMessage } from '../../../src/backends/claude/index';
-import type { AgentEvent } from '../../../src/types';
+import {
+  ClaudeBackend,
+  MessageStream,
+  buildInitialContentParts,
+  claude,
+  translateMessage,
+} from '../../../src/backends/claude/index';
+import type { AgentEvent, Attachment } from '../../../src/types';
 import type { Tool } from '../../../src/tools/types';
 import { z } from 'zod';
 
@@ -231,6 +240,18 @@ describe('translateMessage', () => {
 
 // ── MessageStream ──
 
+// `push(text)` wraps as content-parts now; this helper digs the first text part out.
+function textOf(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    const part = content.find((p): p is { type: 'text'; text: string } =>
+      typeof p === 'object' && p !== null && (p as { type?: string }).type === 'text',
+    );
+    return part?.text ?? '';
+  }
+  return '';
+}
+
 describe('MessageStream', () => {
   it('yields a message pushed before iteration starts', async () => {
     const stream = new MessageStream();
@@ -241,7 +262,7 @@ describe('MessageStream', () => {
     for await (const msg of stream) messages.push(msg);
 
     expect(messages).toHaveLength(1);
-    expect(messages[0]?.message.content).toBe('hello');
+    expect(textOf(messages[0]?.message.content)).toBe('hello');
     expect(messages[0]?.type).toBe('user');
   });
 
@@ -254,8 +275,7 @@ describe('MessageStream', () => {
 
     const texts: string[] = [];
     for await (const msg of stream) {
-      const c = msg.message.content;
-      texts.push(typeof c === 'string' ? c : '');
+      texts.push(textOf(msg.message.content));
     }
 
     expect(texts).toEqual(['one', 'two', 'three']);
@@ -268,8 +288,7 @@ describe('MessageStream', () => {
     const collected: string[] = [];
     const consumer = (async () => {
       for await (const msg of stream) {
-        const c = msg.message.content;
-        collected.push(typeof c === 'string' ? c : '');
+        collected.push(textOf(msg.message.content));
         if (collected.length === 2) stream.end();
       }
     })();
@@ -300,8 +319,7 @@ describe('MessageStream', () => {
 
     const texts: string[] = [];
     for await (const msg of stream) {
-      const c = msg.message.content;
-      texts.push(typeof c === 'string' ? c : '');
+      texts.push(textOf(msg.message.content));
     }
 
     expect(texts).toEqual(['a', 'b']);
@@ -452,5 +470,66 @@ describe('translateMessage with wrapped tools', () => {
         toolCall: { id: 'tu_1', name: 'bash', input: { command: 'ls' } },
       },
     ]);
+  });
+});
+
+// ── buildInitialContentParts ──
+
+describe('buildInitialContentParts', () => {
+  it('returns null when there is no message and no attachments (resume-only)', () => {
+    expect(buildInitialContentParts({})).toBeNull();
+  });
+
+  it('emits a single text part for plain message + no attachments', async () => {
+    const parts = await buildInitialContentParts({ message: 'hello' })!;
+    expect(parts).toEqual([{ type: 'text', text: 'hello' }]);
+  });
+
+  it('orders attachments before text', async () => {
+    const att: Attachment = { type: 'image', source: { kind: 'url', url: 'https://x/y.png' } };
+    const parts = await buildInitialContentParts({ message: 'caption', attachments: [att] })!;
+    expect(parts).toEqual([
+      { type: 'image', source: { type: 'url', url: 'https://x/y.png' } },
+      { type: 'text', text: 'caption' },
+    ]);
+  });
+
+  it('passes through base64 attachments verbatim with media_type', async () => {
+    const att: Attachment = {
+      type: 'image',
+      source: { kind: 'base64', data: 'ZGF0YQ==', mimeType: 'image/png' },
+    };
+    const parts = await buildInitialContentParts({ attachments: [att] })!;
+    expect(parts).toEqual([
+      {
+        type: 'image',
+        source: { type: 'base64', data: 'ZGF0YQ==', media_type: 'image/png' },
+      },
+    ]);
+  });
+
+  it('reads path attachments from disk and infers media_type from extension', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-att-'));
+    const filePath = path.join(dir, 'tiny.png');
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+    fs.writeFileSync(filePath, bytes);
+    const att: Attachment = { type: 'image', source: { kind: 'path', path: filePath } };
+    const parts = await buildInitialContentParts({ attachments: [att] })!;
+    expect(parts).toEqual([
+      {
+        type: 'image',
+        source: { type: 'base64', data: bytes.toString('base64'), media_type: 'image/png' },
+      },
+    ]);
+  });
+
+  it('rejects unsupported media types with a clear error', async () => {
+    const att: Attachment = {
+      type: 'image',
+      source: { kind: 'base64', data: 'ZA==', mimeType: 'image/svg+xml' },
+    };
+    await expect(buildInitialContentParts({ attachments: [att] })).rejects.toThrow(
+      /unsupported image media type/,
+    );
   });
 });

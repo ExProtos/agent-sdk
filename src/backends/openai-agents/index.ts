@@ -24,6 +24,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
+import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
 import {
   Agent,
@@ -48,6 +49,7 @@ import { z } from 'zod';
 import type {
   AgentEvent,
   AgentQuery,
+  Attachment,
   Backend,
   QueryInput,
   StopReason,
@@ -185,12 +187,13 @@ export class OpenAIAgentsBackend implements Backend {
     const hasTodoTool = this.hasTodoTool;
     const canonicalByWireName = this.canonicalByWireName;
     const initialMessage = input.message;
+    const initialAttachments = input.attachments ?? [];
 
     async function* events(): AsyncGenerator<AgentEvent> {
       yield { type: 'session_start', continuation };
 
-      // Empty-message resume: just open the continuation, emit lifecycle.
-      if (initialMessage === undefined) {
+      // Empty-message AND no attachments resume: just open the continuation.
+      if (initialMessage === undefined && initialAttachments.length === 0) {
         // Drain any sideEvents that arrived before iteration started.
         while (sideEvents.length > 0) yield sideEvents.shift()!;
         yield { type: 'session_end', usage: ZERO_USAGE, stopReason: 'stop' };
@@ -200,8 +203,18 @@ export class OpenAIAgentsBackend implements Backend {
       let lastUsage: TokenUsage = ZERO_USAGE;
       let lastStopReason: StopReason = 'stop';
 
+      let runInput: string | AgentInputItem[];
       try {
-        const stream = await run(agent, initialMessage, {
+        runInput = await buildOpenAIRunInput(initialMessage, initialAttachments);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        yield { type: 'error', message, retryable: false };
+        yield { type: 'session_end', usage: ZERO_USAGE, stopReason: 'error' };
+        return;
+      }
+
+      try {
+        const stream = await run(agent, runInput, {
           stream: true,
           session,
           maxTurns,
@@ -718,6 +731,67 @@ export function combineSystem(
   if (base === undefined) return append;
   if (append === undefined) return base;
   return `${base}\n\n${append}`;
+}
+
+/**
+ * Build the second arg for `run(agent, …)`. Plain string when there are no
+ * attachments (matches the SDK's simple-text path); otherwise a single
+ * UserMessageItem with mixed `input_text` / `input_image` content. Path
+ * attachments are read from disk and base64-encoded into a data URL.
+ */
+export async function buildOpenAIRunInput(
+  message: string | undefined,
+  attachments: Attachment[],
+): Promise<string | AgentInputItem[]> {
+  if (attachments.length === 0) return message ?? '';
+  const content: Array<
+    | { type: 'input_text'; text: string }
+    | { type: 'input_image'; image: string }
+  > = [];
+  for (const att of attachments) content.push(await attachmentToOpenAIPart(att));
+  if (message !== undefined) content.push({ type: 'input_text', text: message });
+  return [{ role: 'user', content } as unknown as AgentInputItem];
+}
+
+async function attachmentToOpenAIPart(
+  att: Attachment,
+): Promise<{ type: 'input_image'; image: string }> {
+  if (att.type !== 'image') {
+    throw new Error(
+      `OpenAI Agents backend: unsupported attachment type '${(att as { type: string }).type}'`,
+    );
+  }
+  switch (att.source.kind) {
+    case 'url':
+      return { type: 'input_image', image: att.source.url };
+    case 'base64':
+      return {
+        type: 'input_image',
+        image: `data:${att.source.mimeType};base64,${att.source.data}`,
+      };
+    case 'path': {
+      const data = (await fsp.readFile(att.source.path)).toString('base64');
+      const mediaType = mediaTypeFromPath(att.source.path);
+      return { type: 'input_image', image: `data:${mediaType};base64,${data}` };
+    }
+  }
+}
+
+function mediaTypeFromPath(p: string): string {
+  const ext = p.slice(p.lastIndexOf('.') + 1).toLowerCase();
+  switch (ext) {
+    case 'jpg':
+    case 'jpeg':
+      return 'image/jpeg';
+    case 'png':
+      return 'image/png';
+    case 'gif':
+      return 'image/gif';
+    case 'webp':
+      return 'image/webp';
+    default:
+      throw new Error(`OpenAI Agents backend: cannot infer image media type from extension '.${ext}'`);
+  }
 }
 
 function mapUsage(usage: Usage): TokenUsage {

@@ -8,6 +8,7 @@ import { MockLanguageModelV3, convertArrayToReadableStream } from 'ai/test';
 
 import {
   VercelBackend,
+  buildInitialUserContent,
   findLatestTodoInput,
   formatTodos,
   runSubAgent,
@@ -17,7 +18,7 @@ import {
 import type { UIMessage } from 'ai';
 import { readUIMessages } from '../../../src/persistence';
 import * as builtin from '../../../src/tools/builtin';
-import type { AgentEvent } from '../../../src/types';
+import type { AgentEvent, Attachment } from '../../../src/types';
 import type { Tool } from '../../../src/tools/types';
 
 // ── translatePart ──
@@ -773,5 +774,42 @@ describe('VercelBackend todo reload from JSONL', () => {
       .join('\n');
     expect(systemText).toContain('Current todos:');
     expect(systemText).toContain('remember to ship the thing');
+  });
+});
+
+// ── buildInitialUserContent ──
+
+describe('buildInitialUserContent', () => {
+  it('returns plain string content + single text UI part when there are no attachments', async () => {
+    const out = await buildInitialUserContent('hello', []);
+    expect(out.modelContent).toBe('hello');
+    expect(out.uiParts).toEqual([{ type: 'text', text: 'hello' }]);
+  });
+
+  it('builds image+text content-parts and parallel UI file-parts (URL form)', async () => {
+    const att: Attachment = { type: 'image', source: { kind: 'url', url: 'https://x/y.png' } };
+    const out = await buildInitialUserContent('caption', [att]);
+    expect(out.modelContent).toEqual([
+      { type: 'image', image: new URL('https://x/y.png') },
+      { type: 'text', text: 'caption' },
+    ]);
+    expect(out.uiParts).toEqual([
+      { type: 'file', mediaType: 'application/octet-stream', url: 'https://x/y.png' },
+      { type: 'text', text: 'caption' },
+    ]);
+  });
+
+  it('reads path attachments and base64-encodes them into a data URL', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vercel-att-'));
+    const filePath = path.join(dir, 'tiny.png');
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+    fs.writeFileSync(filePath, bytes);
+    const att: Attachment = { type: 'image', source: { kind: 'path', path: filePath } };
+    const out = await buildInitialUserContent(undefined, [att]);
+    const expectedDataUrl = `data:image/png;base64,${bytes.toString('base64')}`;
+    expect(out.modelContent).toEqual([
+      { type: 'image', image: bytes.toString('base64'), mediaType: 'image/png' },
+    ]);
+    expect(out.uiParts).toEqual([{ type: 'file', mediaType: 'image/png', url: expectedDataUrl }]);
   });
 });

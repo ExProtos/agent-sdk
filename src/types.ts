@@ -63,15 +63,35 @@ export type AgentEvent =
   | { type: 'activity' };
 
 /**
+ * Attachment types accepted on `QueryInput.attachments`. Each backend maps
+ * these into its native content-parts shape on the first turn.
+ *
+ * Three image source forms; pick whichever matches what you have:
+ *   - `url`     — remote URL the provider fetches
+ *   - `base64`  — already-encoded bytes + mime type (no I/O)
+ *   - `path`    — local file path. Codex passes through as `localImage`;
+ *                 other backends read the file and base64-encode it.
+ */
+export type Attachment =
+  | { type: 'image'; source: { kind: 'url'; url: string } }
+  | { type: 'image'; source: { kind: 'base64'; data: string; mimeType: string } }
+  | { type: 'image'; source: { kind: 'path'; path: string } };
+
+/**
  * Input to a query. `continuation` is opaque — provider decides what it means
  * (Claude session ID, Codex thread ID, replay history, etc.).
  *
  * `message` is optional. If omitted, the query opens with no initial user
  * message — useful when resuming a thread to inspect state, or when you want
  * to push() the first message asynchronously.
+ *
+ * `attachments` apply to the first turn only (alongside `message`). Backends
+ * that don't support a given form will throw at query() time. Follow-up turns
+ * via `AgentQuery.push` are text-only.
  */
 export interface QueryInput {
   message?: string;
+  attachments?: Attachment[];
   continuation?: string;
   cwd?: string;
   systemPromptAppend?: string;

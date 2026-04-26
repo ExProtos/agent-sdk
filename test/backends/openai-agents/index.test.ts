@@ -8,6 +8,7 @@ import {
   JsonlSession,
   OpenAIAgentsBackend,
   appendJsonlItems,
+  buildOpenAIRunInput,
   combineSystem,
   findLatestTodoInput,
   formatTodos,
@@ -21,7 +22,7 @@ import {
 import * as hostedTools from '../../../src/backends/openai-agents/hosted';
 import * as builtin from '../../../src/tools/builtin';
 import type { Tool } from '../../../src/tools/types';
-import type { AgentEvent } from '../../../src/types';
+import type { AgentEvent, Attachment } from '../../../src/types';
 
 // ── wrapSchemaForOpenAI ──
 
@@ -583,5 +584,61 @@ describe('tool resolution', () => {
         ],
       }),
     ).not.toThrow();
+  });
+});
+
+// ── buildOpenAIRunInput ──
+
+describe('buildOpenAIRunInput', () => {
+  it('returns a plain string when there are no attachments', async () => {
+    expect(await buildOpenAIRunInput('hello', [])).toBe('hello');
+    expect(await buildOpenAIRunInput(undefined, [])).toBe('');
+  });
+
+  it('builds a single user message with input_image + input_text parts', async () => {
+    const att: Attachment = { type: 'image', source: { kind: 'url', url: 'https://x/y.png' } };
+    const out = await buildOpenAIRunInput('caption', [att]);
+    expect(out).toEqual([
+      {
+        role: 'user',
+        content: [
+          { type: 'input_image', image: 'https://x/y.png' },
+          { type: 'input_text', text: 'caption' },
+        ],
+      },
+    ]);
+  });
+
+  it('inlines base64 attachments as data URLs on the image field', async () => {
+    const att: Attachment = {
+      type: 'image',
+      source: { kind: 'base64', data: 'AAAA', mimeType: 'image/png' },
+    };
+    const out = await buildOpenAIRunInput(undefined, [att]);
+    expect(out).toEqual([
+      {
+        role: 'user',
+        content: [{ type: 'input_image', image: 'data:image/png;base64,AAAA' }],
+      },
+    ]);
+  });
+
+  it('reads path attachments from disk and infers media type', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'openai-att-'));
+    const filePath = path.join(dir, 'tiny.png');
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+    fs.writeFileSync(filePath, bytes);
+    const att: Attachment = { type: 'image', source: { kind: 'path', path: filePath } };
+    const out = await buildOpenAIRunInput('look', [att]);
+    const expectedDataUrl = `data:image/png;base64,${bytes.toString('base64')}`;
+    expect(out).toEqual([
+      {
+        role: 'user',
+        content: [
+          { type: 'input_image', image: expectedDataUrl },
+          { type: 'input_text', text: 'look' },
+        ],
+      },
+    ]);
   });
 });

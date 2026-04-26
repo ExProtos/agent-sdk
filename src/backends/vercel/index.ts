@@ -41,9 +41,11 @@ import {
   type UIMessage,
 } from 'ai';
 
+import * as fs from 'node:fs/promises';
 import type {
   AgentEvent,
   AgentQuery,
+  Attachment,
   Backend,
   QueryInput,
   StopReason,
@@ -172,6 +174,7 @@ export class VercelBackend implements Backend {
     const systemAppend = input.systemPromptAppend;
     const persistPath = filePath;
     const initialMessage = input.message;
+    const initialAttachments = input.attachments ?? [];
 
     async function* events(): AsyncGenerator<AgentEvent> {
       yield { type: 'session_start', continuation };
@@ -192,14 +195,21 @@ export class VercelBackend implements Backend {
         }
       }
 
-      // Append the inbound user message and persist as a UIMessage.
-      if (initialMessage !== undefined) {
-        history.push({ role: 'user', content: initialMessage });
-        appendUIMessage(persistPath, {
-          id: randomUUID(),
-          role: 'user',
-          parts: [{ type: 'text', text: initialMessage }],
-        });
+      // Append the inbound user message + attachments and persist as a UIMessage.
+      if (initialMessage !== undefined || initialAttachments.length > 0) {
+        try {
+          const { modelContent, uiParts } = await buildInitialUserContent(
+            initialMessage,
+            initialAttachments,
+          );
+          history.push({ role: 'user', content: modelContent });
+          appendUIMessage(persistPath, { id: randomUUID(), role: 'user', parts: uiParts });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          yield { type: 'error', message, retryable: false };
+          yield { type: 'session_end', usage: ZERO_USAGE, stopReason: 'error' };
+          return;
+        }
       }
 
       let lastUsage: TokenUsage = ZERO_USAGE;
@@ -513,6 +523,86 @@ export function formatTodos(input: unknown): string {
       .join('\n');
   }
   return '';
+}
+
+/**
+ * Build the inbound first-turn user content in two shapes: the `ModelMessage`
+ * payload streamText consumes, and the `UIMessagePart[]` we persist as the
+ * canonical transcript. Path attachments are read from disk and base64-encoded
+ * into a data URL so both shapes carry self-contained bytes.
+ */
+export async function buildInitialUserContent(
+  message: string | undefined,
+  attachments: Attachment[],
+): Promise<{
+  modelContent: string | Array<{ type: 'text'; text: string } | { type: 'image'; image: string | URL; mediaType?: string }>;
+  uiParts: Array<
+    | { type: 'text'; text: string }
+    | { type: 'file'; mediaType: string; url: string }
+  >;
+}> {
+  if (attachments.length === 0) {
+    const text = message ?? '';
+    return {
+      modelContent: text,
+      uiParts: [{ type: 'text', text }],
+    };
+  }
+  const modelContent: Array<
+    { type: 'text'; text: string } | { type: 'image'; image: string | URL; mediaType?: string }
+  > = [];
+  const uiParts: Array<
+    { type: 'text'; text: string } | { type: 'file'; mediaType: string; url: string }
+  > = [];
+  for (const att of attachments) {
+    const { dataUrlOrUrl, mediaType, modelImage } = await loadAttachment(att);
+    modelContent.push({ type: 'image', image: modelImage, ...(mediaType !== undefined && { mediaType }) });
+    uiParts.push({ type: 'file', mediaType: mediaType ?? 'application/octet-stream', url: dataUrlOrUrl });
+  }
+  if (message !== undefined) {
+    modelContent.push({ type: 'text', text: message });
+    uiParts.push({ type: 'text', text: message });
+  }
+  return { modelContent, uiParts };
+}
+
+async function loadAttachment(
+  att: Attachment,
+): Promise<{ dataUrlOrUrl: string; mediaType: string | undefined; modelImage: string | URL }> {
+  if (att.type !== 'image') {
+    throw new Error(`Vercel backend: unsupported attachment type '${(att as { type: string }).type}'`);
+  }
+  switch (att.source.kind) {
+    case 'url':
+      return { dataUrlOrUrl: att.source.url, mediaType: undefined, modelImage: new URL(att.source.url) };
+    case 'base64': {
+      const url = `data:${att.source.mimeType};base64,${att.source.data}`;
+      return { dataUrlOrUrl: url, mediaType: att.source.mimeType, modelImage: att.source.data };
+    }
+    case 'path': {
+      const data = (await fs.readFile(att.source.path)).toString('base64');
+      const mediaType = mediaTypeFromPath(att.source.path);
+      const url = `data:${mediaType};base64,${data}`;
+      return { dataUrlOrUrl: url, mediaType, modelImage: data };
+    }
+  }
+}
+
+function mediaTypeFromPath(p: string): string {
+  const ext = p.slice(p.lastIndexOf('.') + 1).toLowerCase();
+  switch (ext) {
+    case 'jpg':
+    case 'jpeg':
+      return 'image/jpeg';
+    case 'png':
+      return 'image/png';
+    case 'gif':
+      return 'image/gif';
+    case 'webp':
+      return 'image/webp';
+    default:
+      throw new Error(`Vercel backend: cannot infer image media type from extension '.${ext}'`);
+  }
 }
 
 function combineSystem(base: string | undefined, append: string | undefined): string | undefined {

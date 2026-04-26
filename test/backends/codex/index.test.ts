@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest';
 import {
   CodexBackend,
   EventQueue,
+  attachmentToCodexInput,
   codex,
   translateItem,
   translateNotification,
 } from '../../../src/backends/codex/index';
+import type { Attachment } from '../../../src/types';
 import type { ServerNotification, ThreadItem } from '../../../src/backends/codex/protocol';
 import type { AgentEvent } from '../../../src/types';
 
@@ -816,6 +818,31 @@ describe('CodexBackend', () => {
       const builtin = await import('../../../src/tools/builtin');
       const backend = codex({ tools: [builtin.webFetch] });
       expect(backend.customTools).toEqual([]);
+    });
+  });
+});
+
+// ── Attachment mapping ──
+
+describe('attachmentToCodexInput', () => {
+  it('maps url → image', () => {
+    const att: Attachment = { type: 'image', source: { kind: 'url', url: 'https://example.com/cat.png' } };
+    expect(attachmentToCodexInput(att)).toEqual({ type: 'image', url: 'https://example.com/cat.png' });
+  });
+
+  it('maps path → localImage', () => {
+    const att: Attachment = { type: 'image', source: { kind: 'path', path: '/tmp/cat.png' } };
+    expect(attachmentToCodexInput(att)).toEqual({ type: 'localImage', path: '/tmp/cat.png' });
+  });
+
+  it('maps base64 → data URL on image', () => {
+    const att: Attachment = {
+      type: 'image',
+      source: { kind: 'base64', data: 'AAAA', mimeType: 'image/png' },
+    };
+    expect(attachmentToCodexInput(att)).toEqual({
+      type: 'image',
+      url: 'data:image/png;base64,AAAA',
     });
   });
 });
