@@ -44,7 +44,7 @@ export interface ClaudeBackendOptions {
 }
 ```
 
-**Wiring.** When either typed field is set, build a `{ ...process.env, <var>: <value> }` env record and pass it to the SDK. When both are unset, omit the SDK's `env` field entirely so the SDK uses its own default (`process.env`).
+**Wiring.** When either typed field is set, build a `{ ...process.env, <var>: <value> }` env record and pass it to the SDK. When both are unset, omit the SDK's `env` field entirely so the SDK uses its own default (`process.env`). The constructor throws on both-set before this code runs, so the two `if` blocks below assume at most one of `oauthToken`/`apiKey` is defined.
 
 ```typescript
 let sdkEnv: Record<string, string | undefined> | undefined;
@@ -162,6 +162,8 @@ Signature: `codex.login(opts: { profile?: string; apiKey?: string; cwd?: string 
 
 Implementation note: TypeScript supports `function codex(...): CodexBackend` plus `codex.login = function (...) { ... }` natively — declared as `codex: { (opts: CodexBackendOptions): CodexBackend; login(opts: ...): Promise<...> }` in the export.
 
+**`codex` binary on PATH.** `codex.login()` requires the `codex` binary on PATH for the OAuth path (it shells out via `spawnSync('codex', ['login'], …)`). Same prereq as using the Backend at all, since constructing one spawns `codex app-server`. The helper should catch `ENOENT` from the spawn and surface a clear error: `'codex' binary not found on PATH. Install it from https://github.com/openai/codex (or run \`npm i -g @openai/codex\` if you use the npm package).` The `apiKey` path doesn't shell out, so this only affects OAuth callers.
+
 **Profile sharing.** Two Backend instances with the same effective profile in the same cwd share `auth.json` and session state. Last-write-wins on `auth.json` is fine — the dir is wrapper-owned cache, never a long-term credential store. If you want concurrent Backends with different keys, give each one a distinct `profile` so they don't churn each other's cached `auth.json`.
 
 **Never touch `~/.codex/`.** That's the user's own codex CLI state, populated by `codex login` in normal use. The wrapper writes only under `~/.agent-sdk/codex/`. Even when `profile`/`apiKey` are unset and the codex CLI falls back to ambient `~/.codex/`, the wrapper does nothing to that dir — no reads, no writes, no mode mutations.
@@ -259,7 +261,7 @@ Pass it through on every `run(this.agent, ..., { modelProvider, ... })` call (th
 
 ### Tests
 - Add unit tests verifying the new fields wire through to the underlying SDK options (Claude env merge; Codex helper resolution + auth.json write/read; OpenAI `modelProvider` instance).
-- Codex helper-specific tests: `apiKey`-only defaults profile to `'default'`; `profile`-only with missing auth.json throws with the documented multi-line message; `profile`+`apiKey` writes idempotently; same effective profile across calls reuses the dir.
+- Codex helper-specific tests: `apiKey`-only defaults profile to `'default'`; `profile`-only with missing auth.json throws with the documented multi-line message; `profile`+`apiKey` overwrites `auth.json` unconditionally on every construction (including over a pre-existing OAuth or different-key auth.json); same effective profile across calls reuses the dir.
 - E2E coverage: at least one test per backend that hits the real service with a per-Backend auth — currently the e2e suite munges `process.env`; this is a chance to validate the new path end-to-end.
 
 ### CHANGELOG / README
