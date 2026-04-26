@@ -17,7 +17,7 @@ import { z } from 'zod';
 import { Agent, claude, tools, type Tool } from '../../src/index';
 import {
   assembledText,
-  claudeOAuthPreferredEnv,
+  claudeOAuthPreferredToken,
   collectEvents,
   continuationFromEvents,
   hasAnthropicAuth,
@@ -28,8 +28,8 @@ import {
 // OAuth so tests run against the user's Pro/Max subscription instead of
 // metered API billing. Returns undefined when only one is set, in which
 // case the SDK uses whatever's there.
-const oauthEnv = claudeOAuthPreferredEnv();
-const claudeOpts = oauthEnv !== undefined ? { env: oauthEnv } : {};
+const oauthToken = claudeOAuthPreferredToken();
+const claudeOpts = oauthToken !== undefined ? { oauthToken } : {};
 
 describe.skipIf(!hasAnthropicAuth)('Claude end-to-end', () => {
   it('completes a trivial query and emits a coherent event sequence', async () => {

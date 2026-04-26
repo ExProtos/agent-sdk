@@ -67,7 +67,7 @@ Swap the backend with no other changes:
 import { codex, vercel, openai, hostedTools } from 'agent-sdk';
 import { anthropic } from '@ai-sdk/anthropic';
 
-// Codex (subscription or OPENAI_API_KEY)
+// Codex (auth from ~/.codex/auth.json, populated by `codex login`)
 new Agent({ backend: codex({ tools: tools.all }) });
 
 // Vercel — any AI SDK provider works
@@ -84,16 +84,27 @@ new Agent({
 
 ## Auth
 
-The wrapper doesn't manage credentials — it accepts whatever the underlying SDK reads.
+Each backend takes typed auth fields on its options; ambient env vars work as a fallback.
 
-| Backend | Mechanism |
-|---|---|
-| Claude (Pro/Max OAuth) | `CLAUDE_CODE_OAUTH_TOKEN` (run `claude setup-token` to get it) |
-| Claude (API key) | `ANTHROPIC_API_KEY` |
-| Codex (ChatGPT subscription) | `~/.codex/auth.json` — run `codex login` once |
-| Codex (API key) | `OPENAI_API_KEY` |
-| Vercel | Provider-dependent. Each `@ai-sdk/*` provider reads its own env var. |
-| OpenAI Agents | `OPENAI_API_KEY` |
+| Backend | Typed fields | Env fallback |
+|---|---|---|
+| Claude | `oauthToken` (Pro/Max) or `apiKey` | `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY` |
+| Codex | `codexHome` (path to a `CODEX_HOME` dir) | ambient `~/.codex/` from `codex login` |
+| Vercel | none (auth lives inside the `LanguageModel`) | provider-dependent |
+| OpenAI | `apiKey`, `baseURL`, `organization`, `project` | `OPENAI_API_KEY` |
+
+```typescript
+claude({ oauthToken: process.env.CLAUDE_CODE_OAUTH_TOKEN });
+claude({ apiKey: 'sk-ant-…' });
+
+openai({ model: 'gpt-5-mini', apiKey: 'sk-…' });
+
+// Codex: just a path passthrough. Caller manages auth.json themselves.
+//   CODEX_HOME=/path/to/profile codex login                  # ChatGPT OAuth
+//   CODEX_HOME=/path/to/profile codex login --with-api-key   # API key
+codex({ codexHome: '/path/to/profile' });
+codex({});  // ambient ~/.codex/
+```
 
 Subscription OAuth is licensed for personal use; for multi-user products, use the API keys.
 

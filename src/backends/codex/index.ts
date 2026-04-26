@@ -15,8 +15,10 @@
  * - Coarse event translation: full items at `item/completed`. Streaming
  *   deltas (`item/agentMessage/delta`, `item/reasoning/textDelta`) are
  *   surfaced as text_delta / thinking_delta events
- * - Auth: caller has run `codex login` (or has OPENAI_API_KEY set);
- *   query() errors with a clear message if not logged in
+ * - Auth: pass `codexHome` to point the codex CLI at a specific
+ *   `CODEX_HOME` directory (where `auth.json` and session state live).
+ *   Without it, Codex uses its default `~/.codex/`. The caller is
+ *   responsible for populating `auth.json` via `codex login`.
  */
 
 import { fileURLToPath } from 'node:url';
@@ -42,7 +44,7 @@ import type {
  */
 export type CodexEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 
-export interface CodexBackendOptions extends CodexClientOptions {
+export interface CodexBackendOptions {
   tools?: Tool[];
   /** Override Codex's model selection. */
   model?: string;
@@ -54,6 +56,25 @@ export interface CodexBackendOptions extends CodexClientOptions {
   effort?: CodexEffort;
   /** Append to Codex's developer instructions (similar to systemPromptAppend). */
   developerInstructions?: string;
+  /**
+   * Path to a `CODEX_HOME` directory (the codex CLI reads `auth.json` and
+   * stores `sessions/`, `history.jsonl`, etc. under this dir). When set,
+   * the wrapper merges `CODEX_HOME=<codexHome>` into the spawn env for
+   * the `codex app-server` subprocess. When unset, the codex CLI uses
+   * its default `~/.codex/`.
+   *
+   * The caller is responsible for populating `auth.json`. Run
+   * `CODEX_HOME=<codexHome> codex login` (ChatGPT OAuth) or
+   * `CODEX_HOME=<codexHome> codex login --with-api-key` (API key) once;
+   * subsequent constructions reuse the file.
+   */
+  codexHome?: string;
+  /** Override the codex binary. Defaults to `codex` on PATH. */
+  command?: string;
+  /** Override the codex subcommand args. Defaults to `['app-server']`. */
+  args?: string[];
+  /** Override the codex app-server subprocess's working directory. */
+  cwd?: string;
 }
 
 const STALE_THREAD_RE = /thread.*not found|no such thread|thread.*does not exist/i;
@@ -61,7 +82,7 @@ const STALE_THREAD_RE = /thread.*not found|no such thread|thread.*does not exist
 class CodexAuthRequiredError extends Error {
   constructor() {
     super(
-      'codex is not logged in. Run `codex login` (for ChatGPT) or set OPENAI_API_KEY before using this backend.',
+      'codex is not logged in. Run `codex login` (or `CODEX_HOME=<dir> codex login` for a custom auth location) before using this backend.',
     );
     this.name = 'CodexAuthRequiredError';
   }
@@ -84,16 +105,25 @@ export class CodexBackend implements Backend {
   private bridgeConfig: BridgeConfig | null = null;
 
   constructor(options: CodexBackendOptions = {}) {
-    const { tools, model, effort, developerInstructions, ...client } = options;
-    this.clientOptions = client;
-    this.model = model;
-    this.effort = effort;
-    this.developerInstructions = developerInstructions;
+    const env =
+      options.codexHome !== undefined ? { CODEX_HOME: options.codexHome } : undefined;
+
+    const clientOptions: CodexClientOptions = {
+      ...(options.command !== undefined && { command: options.command }),
+      ...(options.args !== undefined && { args: options.args }),
+      ...(options.cwd !== undefined && { cwd: options.cwd }),
+      ...(env !== undefined && { env }),
+    };
+
+    this.clientOptions = clientOptions;
+    this.model = options.model;
+    this.effort = options.effort;
+    this.developerInstructions = options.developerInstructions;
 
     // Bridge-eligible: has execute() and no native.codex (Codex's built-in
     // tools always win when both are present, since they fire automatically
     // server-side without our involvement).
-    this.customTools = (tools ?? []).filter(
+    this.customTools = (options.tools ?? []).filter(
       (t) => typeof t.execute === 'function' && !t.native?.codex,
     );
   }

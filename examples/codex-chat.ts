@@ -3,7 +3,7 @@
  *
  * Requires:
  *   1. `codex` CLI installed and on PATH (npm i -g @openai/codex or via brew)
- *   2. Logged in: `codex login` (for ChatGPT) OR `OPENAI_API_KEY` set
+ *   2. Logged in: `codex login` (ChatGPT OAuth) or `codex login --with-api-key`
  *
  * Run:
  *   pnpm exec tsx examples/codex-chat.ts

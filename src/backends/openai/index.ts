@@ -33,14 +33,15 @@ import {
   Agent,
   MemorySession,
   OpenAIConversationsSession,
+  OpenAIProvider,
   OpenAIResponsesCompactionSession,
   RunAgentUpdatedStreamEvent,
   RunItemStreamEvent,
   RunRawModelStreamEvent,
+  Runner,
   Usage,
   codeInterpreterTool,
   imageGenerationTool,
-  run,
   tool,
   webSearchTool,
   type AgentInputItem,
@@ -106,6 +107,18 @@ export interface OpenAIBackendOptions {
    * by default; opt out explicitly with `autoCompact: false`).
    */
   autoCompact?: boolean;
+  /**
+   * OpenAI API key. If unset, the SDK falls back to ambient `OPENAI_API_KEY`.
+   * Setting this here builds a per-Backend `OpenAIProvider`, isolating this
+   * Backend's auth from any other Backend in the same process.
+   */
+  apiKey?: string;
+  /** Optional override for the OpenAI base URL (proxy / Azure / on-prem). */
+  baseURL?: string;
+  /** Optional OpenAI organization ID. */
+  organization?: string;
+  /** Optional OpenAI project ID. */
+  project?: string;
 }
 
 const DEFAULT_MAX_TURNS = 20;
@@ -126,6 +139,7 @@ export class OpenAIBackend implements Backend {
   private readonly subagentToolsFor: (subagent_type: string) => Tool[];
 
   private readonly agent: Agent;
+  private readonly runner: Runner;
   private readonly canonicalByWireName = new Map<string, string>();
   private readonly hasTodoTool: boolean;
   private readonly todosByContinuation = new Map<string, unknown>();
@@ -172,6 +186,21 @@ export class OpenAIBackend implements Backend {
       ...(this.modelSettings !== undefined && { modelSettings: this.modelSettings }),
       tools: sdkTools,
     });
+
+    const providerOptions: ConstructorParameters<typeof OpenAIProvider>[0] = {
+      ...(options.apiKey !== undefined && { apiKey: options.apiKey }),
+      ...(options.baseURL !== undefined && { baseURL: options.baseURL }),
+      ...(options.organization !== undefined && { organization: options.organization }),
+      ...(options.project !== undefined && { project: options.project }),
+    };
+    const hasCustomProvider =
+      options.apiKey !== undefined
+      || options.baseURL !== undefined
+      || options.organization !== undefined
+      || options.project !== undefined;
+    this.runner = hasCustomProvider
+      ? new Runner({ modelProvider: new OpenAIProvider(providerOptions) })
+      : new Runner();
   }
 
   isContinuationInvalid(err: unknown): boolean {
@@ -195,6 +224,7 @@ export class OpenAIBackend implements Backend {
     const sideEvents: AgentEvent[] = [];
 
     const agent = this.agent;
+    const runner = this.runner;
     const maxTurns = this.maxTurns;
     const todosByContinuation = this.todosByContinuation;
     const hasTodoTool = this.hasTodoTool;
@@ -227,7 +257,7 @@ export class OpenAIBackend implements Backend {
       }
 
       try {
-        const stream = await run(agent, runInput, {
+        const stream = await runner.run(agent, runInput, {
           stream: true,
           session,
           maxTurns,
@@ -315,6 +345,7 @@ export class OpenAIBackend implements Backend {
     const model = this.model;
     const modelSettings = this.modelSettings;
     const instructions = this.instructions;
+    const runner = this.runner;
 
     // Use the canonical union schema verbatim — wrapSchemaForOpenAI flattens
     // it into a top-level keyed object the SDK's tool() helper accepts.
@@ -358,7 +389,7 @@ export class OpenAIBackend implements Backend {
           ...(modelSettings !== undefined && { modelSettings }),
           tools: childSdkTools,
         });
-        const result = await run(child, i.prompt);
+        const result = await runner.run(child, i.prompt);
         const text = result.finalOutput;
         return typeof text === 'string' ? text : JSON.stringify(text);
       },

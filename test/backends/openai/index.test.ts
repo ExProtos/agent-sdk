@@ -531,6 +531,38 @@ describe('OpenAIBackend construction', () => {
     const backend = openai({ model: 'gpt-5' });
     expect(backend.name).toBe('openai');
   });
+
+  it('accepts apiKey', () => {
+    expect(() => openai({ model: 'gpt-5', apiKey: 'sk-test' })).not.toThrow();
+  });
+
+  it('accepts baseURL', () => {
+    expect(() =>
+      openai({ model: 'gpt-5', baseURL: 'https://proxy.example.com/v1' }),
+    ).not.toThrow();
+  });
+
+  it('accepts organization and project', () => {
+    expect(() =>
+      openai({ model: 'gpt-5', organization: 'org-test', project: 'proj-test' }),
+    ).not.toThrow();
+  });
+
+  it('accepts apiKey + baseURL + organization + project together', () => {
+    expect(() =>
+      openai({
+        model: 'gpt-5',
+        apiKey: 'sk-test',
+        baseURL: 'https://proxy.example.com/v1',
+        organization: 'org-test',
+        project: 'proj-test',
+      }),
+    ).not.toThrow();
+  });
+
+  it('constructs without auth fields (uses default OpenAIProvider via ambient env)', () => {
+    expect(() => openai({ model: 'gpt-5' })).not.toThrow();
+  });
 });
 
 // ── Tool resolution ──

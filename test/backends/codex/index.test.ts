@@ -820,6 +820,16 @@ describe('CodexBackend', () => {
       expect(backend.customTools).toEqual([]);
     });
   });
+
+  describe('codexHome passthrough', () => {
+    it('accepts codexHome and constructs without throwing', () => {
+      expect(() => codex({ codexHome: '/tmp/some-codex-home' })).not.toThrow();
+    });
+
+    it('accepts no codexHome (falls back to ambient ~/.codex/)', () => {
+      expect(() => codex({})).not.toThrow();
+    });
+  });
 });
 
 // ── Attachment mapping ──

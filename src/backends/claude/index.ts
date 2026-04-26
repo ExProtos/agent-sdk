@@ -18,8 +18,9 @@
  * surface as text_end / thinking_end / tool_call_end events; no streaming
  * deltas yet.
  *
- * Auth: caller's responsibility (CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY
- * in the environment).
+ * Auth: pass `oauthToken` (Pro/Max subscription) or `apiKey` (Anthropic API
+ * key) on the options. If neither is set, the SDK falls back to ambient
+ * `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY`. Setting both throws.
  */
 
 import {
@@ -79,8 +80,16 @@ export interface ClaudeBackendOptions {
   systemPrompt?: SDKOptions['systemPrompt'];
   /** Pass-through to the SDK. */
   additionalDirectories?: string[];
-  /** Pass-through to the SDK. */
-  env?: Record<string, string | undefined>;
+  /**
+   * Subscription OAuth token (Pro/Max). Equivalent to setting
+   * `CLAUDE_CODE_OAUTH_TOKEN` for the SDK. Mutually exclusive with `apiKey`.
+   */
+  oauthToken?: string;
+  /**
+   * Anthropic API key. Equivalent to setting `ANTHROPIC_API_KEY` for the
+   * SDK. Mutually exclusive with `oauthToken`.
+   */
+  apiKey?: string;
 }
 
 const STALE_SESSION_RE = /no conversation found|ENOENT.*\.jsonl|session.*not found/i;
@@ -153,6 +162,10 @@ export class ClaudeBackend implements Backend {
   >;
 
   constructor(options: ClaudeBackendOptions = {}) {
+    if (options.oauthToken !== undefined && options.apiKey !== undefined) {
+      throw new Error('ClaudeBackend: oauthToken and apiKey are mutually exclusive');
+    }
+
     this.tools = options.tools ?? [];
 
     const allowedTools: string[] = [];
@@ -191,6 +204,13 @@ export class ClaudeBackend implements Backend {
         ? { [MCP_SERVER_NAME]: createSdkMcpServer({ name: MCP_SERVER_NAME, tools: customSdkTools }) }
         : undefined;
 
+    let sdkEnv: Record<string, string | undefined> | undefined;
+    if (options.oauthToken !== undefined || options.apiKey !== undefined) {
+      sdkEnv = { ...process.env };
+      if (options.oauthToken !== undefined) sdkEnv.CLAUDE_CODE_OAUTH_TOKEN = options.oauthToken;
+      if (options.apiKey !== undefined) sdkEnv.ANTHROPIC_API_KEY = options.apiKey;
+    }
+
     this.sdkOptions = {
       ...(options.model !== undefined && { model: options.model }),
       ...(options.effort !== undefined && { effort: options.effort }),
@@ -199,7 +219,7 @@ export class ClaudeBackend implements Backend {
       ...(options.additionalDirectories !== undefined && {
         additionalDirectories: options.additionalDirectories,
       }),
-      ...(options.env !== undefined && { env: options.env }),
+      ...(sdkEnv !== undefined && { env: sdkEnv }),
       ...(allowedTools.length > 0 && { allowedTools }),
       ...(mcpServers !== undefined && { mcpServers }),
     };

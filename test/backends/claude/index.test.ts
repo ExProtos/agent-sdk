@@ -410,6 +410,20 @@ describe('ClaudeBackend', () => {
       console.error = origError;
     }
   });
+
+  it('accepts oauthToken alone', () => {
+    expect(() => claude({ oauthToken: 'oat-test' })).not.toThrow();
+  });
+
+  it('accepts apiKey alone', () => {
+    expect(() => claude({ apiKey: 'sk-test' })).not.toThrow();
+  });
+
+  it('throws when both oauthToken and apiKey are set', () => {
+    expect(() => claude({ oauthToken: 'oat', apiKey: 'sk' })).toThrow(
+      /mutually exclusive/,
+    );
+  });
 });
 
 describe('translateMessage with wrapped tools', () => {
