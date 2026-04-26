@@ -273,37 +273,13 @@ export class OpenAIAgentsBackend implements Backend {
   private buildSdkTools(parentTools: Tool[]): SdkTool[] {
     const out: SdkTool[] = [];
     for (const t of parentTools) {
-      const n = t.native?.openai;
-      if (typeof n === 'object' && n !== null) {
-        // User pre-built SDK tool (from hostedTools.* or hand-written) —
-        // forward verbatim.
-        const sdkTool = n as SdkTool & { name?: string; type?: string };
-        out.push(sdkTool);
-        const wireName = sdkTool.name ?? sdkTool.type ?? t.name;
-        this.canonicalByWireName.set(wireName, t.name);
-        continue;
-      }
-      if (n === 'task') {
-        out.push(this.buildTaskTool(t));
-        this.canonicalByWireName.set(t.name, t.name);
-        continue;
-      }
-      if (n === 'todo') {
-        out.push(this.buildTodoTool(t));
-        this.canonicalByWireName.set(t.name, t.name);
-        continue;
-      }
-      if (typeof n === 'string') {
-        const built = buildHostedFromMarker(n);
-        if (built !== undefined) {
-          out.push(built.sdkTool);
-          this.canonicalByWireName.set(built.wireName, t.name);
-          continue;
-        }
-      }
-      if (!t.execute) continue;
-      out.push(wrapPlainTool(t));
-      this.canonicalByWireName.set(t.name, t.name);
+      const resolved = resolveTool(t, {
+        task: (t) => this.buildTaskTool(t),
+        todo: (t) => this.buildTodoTool(t),
+      });
+      if (resolved === undefined) continue;
+      out.push(resolved.sdkTool);
+      this.canonicalByWireName.set(resolved.wireName, t.name);
     }
     return out;
   }
@@ -342,22 +318,10 @@ export class OpenAIAgentsBackend implements Backend {
         );
         const childSdkTools: SdkTool[] = [];
         for (const ct of childTools) {
-          const nm = ct.native?.openai;
-          if (typeof nm === 'object' && nm !== null) {
-            childSdkTools.push(nm as SdkTool);
-            continue;
-          }
-          if (typeof nm === 'string') {
-            const built = buildHostedFromMarker(nm);
-            if (built !== undefined) {
-              childSdkTools.push(built.sdkTool);
-              continue;
-            }
-            // Sub-agents skip 'task' (already filtered) and 'todo' (no
-            // useful behavior in a one-shot child run).
-          }
-          if (!ct.execute) continue;
-          childSdkTools.push(wrapPlainTool(ct));
+          // Children get hosted + function-tool paths; no task/todo
+          // builders passed → those markers fall through and are skipped.
+          const resolved = resolveTool(ct);
+          if (resolved !== undefined) childSdkTools.push(resolved.sdkTool);
         }
         const child = new Agent({
           name: 'agent-sdk-subagent',
@@ -502,32 +466,68 @@ export function rewriteJsonl(filePath: string, items: AgentInputItem[]): void {
 // ── Helpers ──
 
 /**
+ * Resolve a single Tool into the SDK tool to register and the wire name
+ * to map back to canonical in events. Returns undefined for tools that
+ * should be silently dropped (no usable path).
+ *
+ * Dispatch order:
+ *   1. native.openai is an object (pre-built SDK tool) → forward verbatim
+ *   2. native.openai === 'task' (and ctx.task provided) → ctx.task(t)
+ *   3. native.openai === 'todo' (and ctx.todo provided) → ctx.todo(t)
+ *   4. native.openai is a string → lazy-construct via buildHostedFromMarker
+ *   5. has execute → wrapPlainTool
+ *   6. otherwise → undefined
+ *
+ * Sub-agent tool wiring calls this with no `ctx`, so task/todo markers
+ * fall through and the sub-agent gets neither (no recursive task spawn,
+ * no contextual todo state in a one-shot child run).
+ */
+export function resolveTool(
+  t: Tool,
+  ctx: { task?: (t: Tool) => SdkTool; todo?: (t: Tool) => SdkTool } = {},
+): { sdkTool: SdkTool; wireName: string } | undefined {
+  const n = t.native?.openai;
+  if (typeof n === 'object' && n !== null) {
+    return { sdkTool: n as SdkTool, wireName: extractWireName(n, t.name) };
+  }
+  if (n === 'task' && ctx.task) return { sdkTool: ctx.task(t), wireName: t.name };
+  if (n === 'todo' && ctx.todo) return { sdkTool: ctx.todo(t), wireName: t.name };
+  if (typeof n === 'string') {
+    const built = buildHostedFromMarker(n);
+    if (built !== undefined) return built;
+  }
+  if (t.execute) return { sdkTool: wrapPlainTool(t), wireName: t.name };
+  return undefined;
+}
+
+/**
  * Resolve a string `native.openai` marker that maps to one of OpenAI's
  * default-configured hosted tools. Contextual markers (`task`, `todo`)
  * are NOT handled here — they need the backend instance and are
- * dispatched separately in buildSdkTools.
+ * dispatched separately in resolveTool.
  *
  * Returns undefined for unknown markers (or 'task'/'todo'); caller falls
  * through to the function-tool path or skips.
  */
+const HOSTED_FACTORIES: Record<string, () => SdkTool> = {
+  web_search: webSearchTool,
+  code_interpreter: codeInterpreterTool,
+  image_generation: imageGenerationTool,
+};
+
 export function buildHostedFromMarker(
   marker: string,
 ): { sdkTool: SdkTool; wireName: string } | undefined {
-  let sdkTool: (SdkTool & { name?: string; type?: string }) | undefined;
-  switch (marker) {
-    case 'web_search':
-      sdkTool = webSearchTool() as SdkTool & { name?: string; type?: string };
-      break;
-    case 'code_interpreter':
-      sdkTool = codeInterpreterTool() as SdkTool & { name?: string; type?: string };
-      break;
-    case 'image_generation':
-      sdkTool = imageGenerationTool() as SdkTool & { name?: string; type?: string };
-      break;
-    default:
-      return undefined;
-  }
-  return { sdkTool, wireName: sdkTool.name ?? sdkTool.type ?? marker };
+  const factory = HOSTED_FACTORIES[marker];
+  if (factory === undefined) return undefined;
+  const sdkTool = factory();
+  return { sdkTool, wireName: extractWireName(sdkTool, marker) };
+}
+
+function extractWireName(sdkTool: unknown, fallback: string): string {
+  if (typeof sdkTool !== 'object' || sdkTool === null) return fallback;
+  const t = sdkTool as { name?: string; type?: string };
+  return t.name ?? t.type ?? fallback;
 }
 
 function wrapPlainTool(t: Tool): SdkTool {

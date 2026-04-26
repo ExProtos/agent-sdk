@@ -131,48 +131,9 @@ export class VercelBackend implements Backend {
     this.hasTodoTool = parentTools.some((t) => t.native?.vercel === 'todo');
     const set: ToolSet = {};
     for (const t of parentTools) {
-      if (t.native?.vercel === 'task') {
-        // The task tool is contextual — it needs the parent's model and
-        // a derived tool subset. Build a closure-bound replacement here
-        // rather than calling the canonical execute (which has none).
-        const subagentToolsFor =
-          options.subagentTools ??
-          ((_: string) => parentTools.filter((p) => p.native?.vercel !== 'task'));
-        const model = this.model;
-        const callOptions = () => this.callOptions;
-        set[t.name] = vercelTool({
-          description: t.description,
-          inputSchema: t.schema,
-          execute: async (input: unknown) =>
-            runSubAgent(input, model, subagentToolsFor, callOptions()),
-        });
-        continue;
-      }
-      if (t.native?.vercel === 'todo') {
-        // The todo tool is also contextual — its execute updates a per-
-        // continuation map, and prepareStep re-injects the latest todos
-        // into the system prompt for every subsequent step. Reads the
-        // continuation from experimental_context.
-        const todos = this.todosByContinuation;
-        set[t.name] = vercelTool({
-          description: t.description,
-          inputSchema: t.schema,
-          execute: async (input: unknown, opts) => {
-            const ctx = opts.experimental_context as { continuation?: string } | undefined;
-            if (ctx?.continuation !== undefined) {
-              todos.set(ctx.continuation, input);
-            }
-            return 'todos updated';
-          },
-        });
-        continue;
-      }
-      if (!t.execute) continue;
-      set[t.name] = vercelTool({
-        description: t.description,
-        inputSchema: t.schema,
-        execute: async (input: unknown) => t.execute!(input),
-      });
+      const execute = this.resolveExecute(t, parentTools, options);
+      if (execute === undefined) continue;
+      set[t.name] = vercelTool({ description: t.description, inputSchema: t.schema, execute });
     }
     this.toolSet = set;
 
@@ -373,6 +334,39 @@ export class VercelBackend implements Backend {
 
   async close(): Promise<void> {
     this.histories.clear();
+  }
+
+  /**
+   * Resolve a single Tool to the execute function we wire into vercelTool.
+   * Returns undefined for tools with no usable path (will be silently
+   * dropped). Three branches:
+   *   - native.vercel === 'task' → closure-bound sub-agent runner
+   *   - native.vercel === 'todo' → per-continuation map writer
+   *   - has execute              → forward as-is
+   */
+  private resolveExecute(
+    t: Tool,
+    parentTools: Tool[],
+    options: VercelBackendOptions,
+  ): ((input: unknown, opts: { experimental_context?: unknown }) => Promise<unknown>) | undefined {
+    if (t.native?.vercel === 'task') {
+      const subagentToolsFor =
+        options.subagentTools ??
+        ((_: string) => parentTools.filter((p) => p.native?.vercel !== 'task'));
+      const model = this.model;
+      const callOptions = () => this.callOptions;
+      return async (input) => runSubAgent(input, model, subagentToolsFor, callOptions());
+    }
+    if (t.native?.vercel === 'todo') {
+      const todos = this.todosByContinuation;
+      return async (input, opts) => {
+        const ctx = opts.experimental_context as { continuation?: string } | undefined;
+        if (ctx?.continuation !== undefined) todos.set(ctx.continuation, input);
+        return 'todos updated';
+      };
+    }
+    if (!t.execute) return undefined;
+    return async (input) => t.execute!(input);
   }
 }
 
